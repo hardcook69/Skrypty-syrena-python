@@ -637,13 +637,15 @@ class App(ttkb.Window):
                                     value=_date.today() + timedelta(days=30))
         self._e_to.pack(side="left", padx=(4, 14))
         ttkb.Label(dr, text="Godzina:", font=FONT_SMALL).pack(side="left")
-        self._sp_hour = ttkb.Spinbox(dr, from_=0, to=23, width=3, format="%02.0f",
-                                     font=FONT_SMALL, wrap=True, bootstyle=ACCENT_STYLE)
+        self._sp_hour = ttkb.Combobox(dr, values=[f"{h:02d}" for h in range(24)],
+                                      state="readonly", width=3, font=FONT_SMALL,
+                                      bootstyle=ACCENT_STYLE)
         self._sp_hour.set("10")
         self._sp_hour.pack(side="left", padx=(4, 0))
         ttkb.Label(dr, text=":", font=FONT_SMALL).pack(side="left")
-        self._sp_minute = ttkb.Spinbox(dr, from_=0, to=55, increment=5, width=3, format="%02.0f",
-                                       font=FONT_SMALL, wrap=True, bootstyle=ACCENT_STYLE)
+        self._sp_minute = ttkb.Combobox(dr, values=[f"{m:02d}" for m in range(0, 60, 5)],
+                                        state="readonly", width=3, font=FONT_SMALL,
+                                        bootstyle=ACCENT_STYLE)
         self._sp_minute.set("00")
         self._sp_minute.pack(side="left", padx=(0, 4))
 
@@ -668,7 +670,7 @@ class App(ttkb.Window):
         for i, lbl in enumerate(DOW_LABELS):
             v = tk.BooleanVar(value=(i < 5))
             self._dow_vars[i] = v
-            cb = ttkb.Checkbutton(fr2, text=lbl, variable=v, bootstyle=ACCENT_STYLE)
+            cb = ttkb.Checkbutton(fr2, text=lbl, variable=v, bootstyle=f"{ACCENT_STYLE}-toolbutton")
             cb.pack(side="left", padx=2)
             self._dow_checks.append(cb)
         self._on_freq_mode_change()
