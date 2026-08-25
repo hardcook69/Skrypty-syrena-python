@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.log
+config_testowy.json
+config_produkcja.json
+*_last_login.json
+*_crash.log
