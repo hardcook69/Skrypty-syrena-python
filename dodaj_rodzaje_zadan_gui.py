@@ -21,7 +21,7 @@ które już istnieją (taka sama treść w słowniku 53), są pomijane.
 
 import tkinter as tk
 from tkinter import messagebox, filedialog
-import threading, requests, json, os, re, sys, traceback, logging
+import threading, requests, json, os, re, sys, traceback, logging, difflib
 
 try:
     import ttkbootstrap as ttkb
@@ -252,13 +252,29 @@ def fetch_dictionary_values(client, dictionary_id):
     return data if isinstance(data, list) else (data.get("items") or data.get("data") or [])
 
 
+FUZZY_MATCH_CUTOFF = 0.85
+
+
 def find_value_id_by_content(values, wanted_content, field_label):
+    """Zwraca (id, błąd, notatka). Najpierw dokładne dopasowanie (bez
+    uwzględniania wielkości liter). Jeśli go brak, próbuje dopasowania
+    przybliżonego (literówki typu brakująca litera na końcu) — jeśli
+    znajdzie jednoznacznego kandydata, zwraca go razem z notatką do
+    pokazania w podglądzie (NIGDY po cichu — użytkownik ma to zobaczyć
+    przed wysyłką). Bez dopasowania: błąd z pełną listą dostępnych opcji."""
     wanted_norm = wanted_content.strip().lower()
     for v in values:
         if (v.get("content") or "").strip().lower() == wanted_norm:
-            return v.get("id"), None
+            return v.get("id"), None, None
+    by_lower = {(v.get("content") or "").strip().lower(): v for v in values}
+    close = difflib.get_close_matches(wanted_norm, list(by_lower.keys()), n=1, cutoff=FUZZY_MATCH_CUTOFF)
+    if close:
+        matched = by_lower[close[0]]
+        note = (f"pole '{field_label}': '{wanted_content.strip()}' → "
+               f"'{matched.get('content')}' (dopasowanie przybliżone — sprawdź czy to na pewno o to chodziło)")
+        return matched.get("id"), None, note
     available = ", ".join(repr(v.get("content")) for v in values)
-    return None, f"Nie znaleziono wartości '{wanted_content}' dla pola '{field_label}'. Dostępne opcje: {available}"
+    return None, f"Nie znaleziono wartości '{wanted_content}' dla pola '{field_label}'. Dostępne opcje: {available}", None
 
 
 def parse_duration_minutes(text):
@@ -271,7 +287,11 @@ def parse_duration_minutes(text):
 
 def resolve_task_value_attributes(client, structure_elements, row, side, dict_value_cache,
                                   subordinate_id=None):
+    """Zwraca (attrs, błąd, notatki). `notatki` to lista tekstów o
+    zastosowanych dopasowaniach przybliżonych (literówki w Excelu) —
+    puste, jeśli wszystko dopasowało się dokładnie."""
     attrs = []
+    notes = []
     for elem in structure_elements:
         name = (elem.get("name") or "").strip().lower()
         linked_dict_id = elem.get("elementDictionaryId")
@@ -285,28 +305,37 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
 
         if name == "kategoria zadania":
             wanted = row["kategoria_zadania_pracownik"] if side == "pracownik" else row["kategoria_zadania_mieszkaniec"]
-            value, err = find_value_id_by_content(dict_values(), wanted, elem.get("name"))
-            if err: return None, err
+            value, err, note = find_value_id_by_content(dict_values(), wanted, elem.get("name"))
+            if err: return None, err, notes
+            if note: notes.append(note)
 
         elif name == "czas normatywny":
             value = parse_duration_minutes(row["czas_realizacji"])
             if value is None:
-                return None, f"Nie rozpoznano czasu trwania '{row['czas_realizacji']}' (oczekiwano np. '30 minut', '1 godzina')."
+                return None, f"Nie rozpoznano czasu trwania '{row['czas_realizacji']}' (oczekiwano np. '30 minut', '1 godzina').", notes
 
         elif name == "stanowisko":
-            single_id, err = find_value_id_by_content(dict_values(), row["stanowisko"], elem.get("name"))
-            if err: return None, err
-            value = [single_id]
+            names = [x.strip() for x in (row["stanowisko"] or "").split(",") if x.strip()]
+            if not names:
+                return None, "Brak wartości w polu 'Stanowisko'.", notes
+            ids = []
+            for n in names:
+                vid, err, note = find_value_id_by_content(dict_values(), n, elem.get("name"))
+                if err: return None, err, notes
+                if note: notes.append(note)
+                ids.append(vid)
+            value = ids
 
         elif name == "ilość pracowników":
             try:
                 value = int(str(row["ilosc_pracownikow"]).strip())
             except (ValueError, TypeError):
-                return None, f"'{row['ilosc_pracownikow']}' nie jest liczbą całkowitą (Ilość pracowników)."
+                return None, f"'{row['ilosc_pracownikow']}' nie jest liczbą całkowitą (Ilość pracowników).", notes
 
         elif name == "priorytet zadania":
-            value, err = find_value_id_by_content(dict_values(), row["priorytet"], elem.get("name"))
-            if err: return None, err
+            value, err, note = find_value_id_by_content(dict_values(), row["priorytet"], elem.get("name"))
+            if err: return None, err, notes
+            if note: notes.append(note)
 
         elif name == "podstawa prawna":
             value = _OMIT
@@ -319,8 +348,9 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
             if not usluga:
                 value = _OMIT
             else:
-                value, err = find_value_id_by_content(dict_values(), usluga, elem.get("name"))
-                if err: return None, err
+                value, err, note = find_value_id_by_content(dict_values(), usluga, elem.get("name"))
+                if err: return None, err, notes
+                if note: notes.append(note)
 
         elif name == "kanał komunikacyjny":
             names = [x.strip() for x in (row["kanal"] or "").split(",") if x.strip()]
@@ -329,8 +359,9 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
             else:
                 ids = []
                 for n in names:
-                    vid, err = find_value_id_by_content(dict_values(), n, elem.get("name"))
-                    if err: return None, err
+                    vid, err, note = find_value_id_by_content(dict_values(), n, elem.get("name"))
+                    if err: return None, err, notes
+                    if note: notes.append(note)
                     ids.append(vid)
                 value = ids
 
@@ -358,9 +389,10 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
                 else:
                     return None, (f"Nazwa zadania '{row['zadanie_pracownik']}' nie zawiera słowa "
                                   f"'otwarte' ani 'zamknięte' — nie wiadomo jaki 'Rodzaj zadania "
-                                  f"grupowego' ustawić.")
-            value, err = find_value_id_by_content(dict_values(), wanted, elem.get("name"))
-            if err: return None, err
+                                  f"grupowego' ustawić."), notes
+            value, err, note = find_value_id_by_content(dict_values(), wanted, elem.get("name"))
+            if err: return None, err, notes
+            if note: notes.append(note)
 
         elif name == "rodzaj zadania podrzędnego":
             if side == "mieszkaniec" or subordinate_id is None:
@@ -373,7 +405,7 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
 
         else:
             return None, (f"Słownik {ZADANIA_DICTIONARY_ID} wymaga pola '{elem.get('name')}', którego "
-                          f"to GUI jeszcze nie obsługuje.")
+                          f"to GUI jeszcze nie obsługuje."), notes
 
         if value is _OMIT:
             continue
@@ -381,7 +413,7 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
             "id": 0, "rowVersion": 0, "isDeleted": False,
             "attributeKind": attr_kind, "attributeType": attr_type, "value": value,
         })
-    return attrs, None
+    return attrs, None, notes
 
 
 def post_task_kind(client, content, display_order, value_attributes):
@@ -767,24 +799,27 @@ class App(ttkb.Window):
             # żeby pokazać ewentualne błędy w podglądzie zamiast dopiero przy wysyłce.
             dict_value_cache = {}
             errors = []
+            fuzzy_notes = []
             for row in resident_to_create:
-                _, e = resolve_task_value_attributes(self.client, structure, row, "mieszkaniec", dict_value_cache)
+                _, e, notes = resolve_task_value_attributes(self.client, structure, row, "mieszkaniec", dict_value_cache)
                 if e:
                     errors.append(f"{row['zadanie_mieszkaniec']}: {e}")
+                fuzzy_notes.extend(notes)
             for row in employee_to_create:
                 fake_subordinate = 1 if row["zadanie_mieszkaniec"] else None
-                _, e = resolve_task_value_attributes(self.client, structure, row, "pracownik", dict_value_cache,
-                                                     subordinate_id=fake_subordinate)
+                _, e, notes = resolve_task_value_attributes(self.client, structure, row, "pracownik", dict_value_cache,
+                                                             subordinate_id=fake_subordinate)
                 if e:
                     errors.append(f"{row['zadanie_pracownik']}: {e}")
+                fuzzy_notes.extend(notes)
 
             self.after(0, lambda: self._render_preview(
                 structure, existing_by_content, len(existing),
-                resident_to_create, employee_to_create, skipped, errors))
+                resident_to_create, employee_to_create, skipped, errors, fuzzy_notes))
         self._bg(_t)
 
     def _render_preview(self, structure, existing_by_content, existing_count,
-                        resident_to_create, employee_to_create, skipped, errors):
+                        resident_to_create, employee_to_create, skipped, errors, fuzzy_notes=None):
         self._structure_elements = structure
         self._existing_by_content = existing_by_content
         self._next_display_order = existing_count
@@ -805,6 +840,12 @@ class App(ttkb.Window):
         if skipped:
             lines.append("")
             lines.append(f"⚠ Pomijam (już istnieją): {', '.join(skipped)}")
+        fuzzy_notes = sorted(set(fuzzy_notes or []))
+        if fuzzy_notes:
+            lines.append("")
+            lines.append("⚠ Dopasowania przybliżone (literówka w Excelu?) — SPRAWDŹ zanim wyślesz:")
+            for n in fuzzy_notes:
+                lines.append(f"   {n}")
         if errors:
             lines.append("")
             lines.append("✗ Błędy (te wiersze NIE zostaną utworzone):")
@@ -815,7 +856,8 @@ class App(ttkb.Window):
         lines.append(f"RAZEM: {len(resident_to_create) + len(employee_to_create)} rodzajów zadań do utworzenia")
         self._set_preview_text("\n".join(lines))
         self._log_msg(f"Podgląd: {len(resident_to_create)} zadań mieszkańca, {len(employee_to_create)} "
-                      f"zadań pracownika, {len(skipped)} pominiętych, {len(errors)} błędów", "inf")
+                      f"zadań pracownika, {len(skipped)} pominiętych, {len(fuzzy_notes)} dopasowań "
+                      f"przybliżonych, {len(errors)} błędów", "inf")
 
         total = len(resident_to_create) + len(employee_to_create)
         self._btn_send.config(state="normal" if total and not errors else "disabled")
@@ -851,9 +893,11 @@ class App(ttkb.Window):
 
             for row in resident_to_create:
                 step += 1
-                attrs, err = resolve_task_value_attributes(
+                attrs, err, notes = resolve_task_value_attributes(
                     self.client, structure, row, "mieszkaniec", dict_value_cache)
                 name = row["zadanie_mieszkaniec"]
+                for note in notes:
+                    self.after(0, lambda note=note: self._log_msg(f"  ⚠ {note}", "inf"))
                 if err:
                     fail += 1
                     self.after(0, lambda name=name, err=err: self._log_msg(f"✗ {name} — {err}", "err"))
@@ -885,8 +929,10 @@ class App(ttkb.Window):
                             self._progress.configure(value=step),
                             self._lbl_progress.config(text=f"{step}/{total}  ✓ {ok}  ✗ {fail}")))
                         continue
-                attrs, err = resolve_task_value_attributes(
+                attrs, err, notes = resolve_task_value_attributes(
                     self.client, structure, row, "pracownik", dict_value_cache, subordinate_id=subordinate_id)
+                for note in notes:
+                    self.after(0, lambda note=note: self._log_msg(f"  ⚠ {note}", "inf"))
                 if err:
                     fail += 1
                     self.after(0, lambda name=name, err=err: self._log_msg(f"✗ {name} — {err}", "err"))
