@@ -90,7 +90,7 @@ except json.JSONDecodeError as e:
 
 try:
     LOG_PATH = os.path.join(SCRIPT_DIR, CFG.get("log_file", "dodaj_rodzaje_zadan_gui.log"))
-    logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
+    logging.basicConfig(filename=LOG_PATH, level=logging.DEBUG,
                         format="%(asctime)s %(levelname)s %(message)s",
                         encoding="utf-8")
 
@@ -208,21 +208,25 @@ class Client:
         return False
 
     def _get(self, url, params=None, _retry=True):
+        logging.debug(f"GET {url} params={params}")
         try:
             r = self.s.get(url, params=params, timeout=TIMEOUT)
         except Exception as e:
             logging.error(f"Wyjątek przy GET {url}: {e}")
             return None, str(e)
+        logging.debug(f"-> HTTP {r.status_code} {url}: {r.text[:500]}")
         if r.status_code == 401 and _retry and self._relogin():
             return self._get(url, params=params, _retry=False)
         return r, None
 
     def _post(self, url, json_body=None, _retry=True):
+        logging.debug(f"POST {url} body={json_body}")
         try:
             r = self.s.post(url, json=json_body, timeout=TIMEOUT)
         except Exception as e:
             logging.error(f"Wyjątek przy POST {url}: {e}")
             return None, str(e)
+        logging.debug(f"-> HTTP {r.status_code} {url}: {r.text[:500]}")
         if r.status_code == 401 and _retry and self._relogin():
             return self._post(url, json_body=json_body, _retry=False)
         return r, None
