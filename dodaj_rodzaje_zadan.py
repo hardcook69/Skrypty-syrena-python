@@ -386,9 +386,18 @@ def post_task_kind(client, content, display_order, value_attributes):
         except Exception:
             detail = ""
         return None, f"HTTP {r.status_code}: {detail}"
+    # Potwierdzone z rzeczywistego ruchu: odpowiedź to gołe id (np. "176960"),
+    # NIE obiekt {"id": ...} jak przy innych POST-ach w tym repo -- stąd
+    # osobna obsługa obu kształtów zamiast zakładania jednego.
     try:
-        new_id = r.json().get("id")
+        data = r.json()
     except Exception:
+        data = None
+    if isinstance(data, dict):
+        new_id = data.get("id")
+    elif isinstance(data, int) and not isinstance(data, bool):
+        new_id = data
+    else:
         new_id = None
     return new_id, None
 
