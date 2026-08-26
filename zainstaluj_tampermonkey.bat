@@ -23,13 +23,11 @@ start "" chrome "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkke
 timeout /t 4 /nobreak >nul
 
 REM --- 2. Skrypty .user.js ---
-REM Zeby ten link zadzialal, plik Wyzwalacz.user.js musi byc naprawde
-REM w repo hardcook69/Skrypty-syrena-python na branchu main (na razie
-REM tam nie jest - git push sie nie udaje, patrz uwaga w wiadomosci).
 REM Zeby dodac kolejny skrypt: skopiuj linie "start "" chrome ..." ponizej
-REM i podmien adres na link do kolejnego pliku .user.js.
+REM i podmien adres na link do kolejnego pliku .user.js w repo
+REM hardcook69/Syrena-Tempermokey.
 
-start "" chrome "https://raw.githubusercontent.com/hardcook69/Skrypty-syrena-python/main/Wyzwalacz.user.js"
+start "" chrome "https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/Wyzwalacz.user.js"
 
 echo.
 echo ============================================================

@@ -2,8 +2,8 @@
 // @name         Wyzwalacz – przyciski zamiast checkboxów + podgląd
 // @namespace    https://apedps01.bzmw.gov.pl/
 // @version      8.1
-// @updateURL    https://raw.githubusercontent.com/hardcook69/Skrypty-syrena-python/main/Wyzwalacz.user.js
-// @downloadURL  https://raw.githubusercontent.com/hardcook69/Skrypty-syrena-python/main/Wyzwalacz.user.js
+// @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/Wyzwalacz.user.js
+// @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/Wyzwalacz.user.js
 // @description  Zamienia checkboxy w oknie "Wyzwalacz" (kreator CRON, wszystkie zakładki) na przyciski (dwa style dla grup Minuta/Godzina/Dzień oraz Miesiąc/Rok), usuwa domyślne zaznaczenie "0" w Minutach/Godzinach, powiększa okno, dwuklik = zaznacz tylko tę wartość.
 // @match        *://apedps01.bzmw.gov.pl/*
 // @run-at       document-idle
