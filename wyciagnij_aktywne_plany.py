@@ -6,14 +6,15 @@ razem z ich usługami, zadaniami i ISTNIEJĄCYMI WYZWALACZAMI (godziny/dni,
 tak jak w zakładce "3 Harmonogramy" w harmonogramy_gui.py), i zapisuje jeden
 plik Excel z dwoma arkuszami:
 
-  "ObecnyStan" — czytelny słownik referencyjny: co dany mieszkaniec już ma
-                 (usługi, zadania, harmonogramy z godzinami), pogrupowane po
-                 nazwisku, z prawdziwym numerem pokoju jako pomocniczą kolumną
-                 do odróżnienia dwóch osób o tym samym imieniu i nazwisku.
-  "Import"     — pusta matryca do wypełnienia (ten sam układ co
-                 matryca_import_harmonogramow.xlsx) — kopiuj z arkusza
-                 "ObecnyStan" właściwe ID, wklejaj do "Import" żeby dodać
-                 nowe usługi/zadania/harmonogramy odpowiedniej osobie.
+  jeden arkusz NA KAŻDE PIĘTRO (np. "V piętro") — siatka:
+      Mieszkaniec | Nazwa zadania | Pon | Wt | Śr | Czw | Pt | Sob | Ndz | Miesięczne
+      Godziny w formacie zakresu np. "13:00-13:30" (koniec liczony z czasu trwania
+      zadania). Harmonogramy nie-tygodniowe (N-ty dzień miesiąca, konkretna data,
+      co N dni) trafiają do osobnej kolumny "Miesięczne", bo nie pasują do siatki
+      dni tygodnia.
+  "Import"    — pusta matryca do wypełnienia (ten sam układ co
+                matryca_import_harmonogramow.xlsx) — żeby dodać nowe
+                usługi/zadania/harmonogramy odpowiedniej osobie.
 
 Mieszkaniec i pokój — POTWIERDZONE zapytaniem z przechwytu w przeglądarce:
   GET :5020/api/beneficiary/by-organization-id/paged?...&statusList=1
@@ -64,26 +65,62 @@ TASK_KIND_ID_CANDIDATES = ("taskKindId", "taskDefinitionKindId", "kindId")
 
 logger = logging.getLogger("wyciagnij_aktywne_plany")
 
-DOW_PL = ["Nd.", "Pon.", "Wt.", "Śr.", "Czw.", "Pt.", "Sob."]
-DOW_EN = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+DOW_GRID = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Ndz"]
+DOW_CRON_TO_GRID = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6}
+DOW_EN_TO_PL_FULL = {"MON": "poniedziałek", "TUE": "wtorek", "WED": "środa", "THU": "czwartek",
+                      "FRI": "piątek", "SAT": "sobota", "SUN": "niedziela"}
+MON_EN_TO_PL = {"JAN": "Sty", "FEB": "Luty", "MAR": "Marz", "APR": "Kwi", "MAY": "Maj", "JUN": "Cze",
+                "JUL": "Lip", "AUG": "Sie", "SEP": "Wrz", "OCT": "Paź", "NOV": "Lis", "DEC": "Gru"}
 
 
-def human_cron(cron):
-    """Kopia human_cron() z harmonogramy_gui.py — spójne formatowanie."""
-    if not cron:
+def _time_range(hr, mn, duration_minutes):
+    """np. 13:00-13:30 - koniec liczony z czasu trwania zadania (normativeTime)."""
+    try:
+        start_total = int(hr) * 60 + int(mn)
+    except (ValueError, TypeError):
         return ""
-    p = cron.split()
+    duration = duration_minutes if isinstance(duration_minutes, (int, float)) else 0
+    end_total = (start_total + int(duration)) % (24 * 60)
+    return f"{start_total // 60:02d}:{start_total % 60:02d}-{end_total // 60:02d}:{end_total % 60:02d}"
+
+
+def classify_trigger(cron, duration_minutes):
+    """Rozkłada CRON (wygenerowany przez TriggerBuilder w harmonogramy_gui.py) na
+    dni tygodnia z zakresem godzin, ALBO tekst dla osobnej kolumny "Miesięczne"
+    (N-ty dzień miesiąca / N-ty dzień tyg. mies. / konkretna data / co N dni) -
+    te tryby nie są "co tydzień w X", więc nie pasują do siatki dni tygodnia.
+    Zwraca (indeksy_dni: list[int] 0=Pon..6=Ndz, tekst_godzin, tekst_miesięczny|None)."""
+    p = (cron or "").split()
     if len(p) < 6:
-        return cron
+        return [], "", None
     _, mn, hr, dom, mon, dow = p[:6]
+    tr = _time_range(hr, mn, duration_minutes)
+
     if dow not in ("*", "?"):
-        return f"{dow}  {hr}:{mn.zfill(2)}"
-    if dom != "?" and "/" in dom:
-        s, n = dom.split("/")
-        return f"co {n}d od {s}.  {hr}:{mn.zfill(2)}"
-    if dom not in ("?", "*") and mon not in ("*", "?"):
-        return f"{dom} {mon}  {hr}:{mn.zfill(2)}"
-    return f"codz.  {hr}:{mn.zfill(2)}"
+        if "#" in dow:
+            parts = dow.split(",")
+            if len(parts) > 1:
+                # co dwa tygodnie - nadal konkretny dzień tygodnia, tylko nie co tydzień
+                d = parts[0].split("#")[0]
+                idx = DOW_CRON_TO_GRID.get(d)
+                return ([idx] if idx is not None else []), f"{tr} (co 2 tyg.)", None
+            d, n = dow.split("#")
+            return [], "", f"{n}. {DOW_EN_TO_PL_FULL.get(d, d)} mies.  {tr}"
+        if "," in dow:
+            idxs = [DOW_CRON_TO_GRID[d] for d in dow.split(",") if d in DOW_CRON_TO_GRID]
+            return idxs, tr, None
+        idx = DOW_CRON_TO_GRID.get(dow)
+        return ([idx] if idx is not None else []), tr, None
+
+    if dom not in ("?", "*"):
+        if "/" in dom:
+            s, n = dom.split("/")
+            return [], "", f"co {n} dni od {s}.  {tr}"
+        if mon not in ("*", "?"):
+            return [], "", f"{dom} {MON_EN_TO_PL.get(mon, mon)}  {tr}"
+        return [], "", f"{dom}. dzień mies.  {tr}"
+
+    return list(range(7)), tr, None
 
 
 def load_cfg():
@@ -285,6 +322,38 @@ def build_import_sheet(wb):
     ws.freeze_panes = "A2"
 
 
+def _safe_sheet_name(name, used):
+    base = (name or "Nieznane piętro").strip()[:31] or "Nieznane piętro"
+    candidate = base
+    n = 2
+    while candidate in used:
+        suffix = f" ({n})"
+        candidate = base[:31 - len(suffix)] + suffix
+        n += 1
+    used.add(candidate)
+    return candidate
+
+
+def build_storey_sheets(wb, storey_rows):
+    """Jeden arkusz na piętro: Mieszkaniec | Nazwa zadania | Pon..Ndz | Miesięczne -
+    tak jak w Szablon_zada_.xlsx, podzielone na moduły/piętra jak w Głównej Matrycy."""
+    headers = ["Mieszkaniec", "Nazwa zadania"] + DOW_GRID + ["Miesięczne"]
+    widths = [22, 30] + [16] * 7 + [26]
+    used_names = set()
+    for storey in sorted(storey_rows.keys(), key=lambda s: s.lower()):
+        rows = sorted(storey_rows[storey], key=lambda r: (r["Mieszkaniec"].lower(), r["NazwaZadania"].lower()))
+        ws = wb.create_sheet(_safe_sheet_name(storey, used_names))
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1B5E20")
+        for r in rows:
+            ws.append([r["Mieszkaniec"], r["NazwaZadania"]] + [r["days"][i] for i in range(7)] + [r["Miesieczne"]])
+        for i, w in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.freeze_panes = "A2"
+
+
 def main():
     logging.basicConfig(level=logging.DEBUG, encoding="utf-8",
                          format="%(asctime)s %(levelname)s %(message)s")
@@ -316,9 +385,10 @@ def main():
     print(f"Znaleziono {len(plans)} aktywnych planów.")
 
     debug_records = []
-    rows = []
+    storey_rows = {}
     taskkind_source_seen = set()
     matched, unmatched = 0, 0
+    total_tasks = 0
 
     for i, plan in enumerate(plans, 1):
         plan_id = plan.get("id")
@@ -326,52 +396,49 @@ def main():
         person = roster.get(visitor_id)
         if person:
             matched += 1
-            resident, room = person["name"], person["room"]
+            resident, storey = person["name"], person["storey"] or "(nieznane piętro)"
         else:
             unmatched += 1
             surname = (plan.get("visitorSurname") or "").strip()
             firstname = (plan.get("visitorFirstName") or "").strip()
             resident = f"{surname} {firstname}".strip() or f"(brak dopasowania, visitorId={visitor_id})"
-            room = ""
+            storey = "(nieznane piętro)"
         print(f"  [{i}/{len(plans)}] Plan {plan_id} — {resident}")
 
         services = fetch_services(client, plan_id)
         time.sleep(delay)
-        base_row = {
-            "Mieszkaniec": resident, "Pokoj": room or "",
-            "PlanId": plan_id, "NazwaPlanu": plan.get("name", ""),
-            "WaznyOd": (plan.get("validFrom") or "")[:10], "WaznyDo": (plan.get("validTo") or "")[:10],
-        }
-        if not services:
-            rows.append({**base_row, "ServiceKindId": "", "NazwaUslugi": "(brak usług)",
-                         "TaskKindId": "", "NazwaZadania": "", "CzasNormatywny": "", "Wyzwalacze": ""})
-            continue
 
         for si, svc in enumerate(services):
             tasks = fetch_tasks(client, svc["id"])
             time.sleep(delay)
             if len(debug_records) < 2 and si == 0:
                 debug_records.append({"plan": plan, "service": svc, "task": tasks[0] if tasks else None})
-            if not tasks:
-                rows.append({**base_row, "ServiceKindId": svc.get("serviceKindId", ""),
-                             "NazwaUslugi": svc.get("serviceKindName", ""),
-                             "TaskKindId": "", "NazwaZadania": "(brak zadań)",
-                             "CzasNormatywny": "", "Wyzwalacze": ""})
-                continue
             for t in tasks:
                 triggers = fetch_triggers(client, t["id"])
                 time.sleep(delay)
                 tkid, tk_src = extract_task_kind_id(t)
                 taskkind_source_seen.add(tk_src)
-                trig_txt = "; ".join(
-                    f"{tr.get('name', '?')}: {human_cron(tr.get('cron', ''))}" for tr in triggers
-                ) or "(brak harmonogramu)"
-                rows.append({**base_row, "ServiceKindId": svc.get("serviceKindId", ""),
-                             "NazwaUslugi": svc.get("serviceKindName", ""),
-                             "TaskKindId": tkid,
-                             "NazwaZadania": t.get("taskKindName", ""),
-                             "CzasNormatywny": t.get("normativeTime", ""),
-                             "Wyzwalacze": trig_txt})
+                duration = t.get("normativeTime")
+
+                days = {d: [] for d in range(7)}
+                monthly = []
+                for tr in triggers:
+                    idxs, day_time, monthly_text = classify_trigger(tr.get("cron", ""), duration)
+                    for idx in idxs:
+                        if day_time:
+                            days[idx].append(day_time)
+                    if monthly_text:
+                        monthly.append(monthly_text)
+                if not triggers:
+                    monthly = ["(brak harmonogramu)"]
+
+                total_tasks += 1
+                storey_rows.setdefault(storey, []).append({
+                    "Mieszkaniec": resident,
+                    "NazwaZadania": t.get("taskKindName", "") or svc.get("serviceKindName", ""),
+                    "days": {d: "; ".join(v) for d, v in days.items()},
+                    "Miesieczne": "; ".join(monthly),
+                })
 
     with open(DEBUG_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(debug_records, f, ensure_ascii=False, indent=2, default=str)
@@ -380,32 +447,15 @@ def main():
     print(f"Dopasowanie planów do rejestru mieszkańców: {matched} dopasowanych, {unmatched} niedopasowanych"
           + (" (visitorId != id z rejestru dla części planów)" if unmatched else ""))
 
-    rows.sort(key=lambda r: (r["Mieszkaniec"].lower(), r["PlanId"] or 0,
-                              r["ServiceKindId"] if isinstance(r["ServiceKindId"], int) else 0,
-                              r["TaskKindId"] if isinstance(r["TaskKindId"], int) else 0))
-
-    headers = ["Mieszkaniec", "Pokoj", "PlanId", "NazwaPlanu", "WaznyOd", "WaznyDo",
-               "ServiceKindId", "NazwaUslugi", "TaskKindId", "NazwaZadania", "CzasNormatywny", "Wyzwalacze"]
     wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "ObecnyStan"
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="1B5E20")
-    for r in rows:
-        ws.append([r[h] for h in headers])
-    widths = [24, 10, 9, 26, 12, 12, 13, 26, 11, 26, 15, 40]
-    for i, w in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = w
-    ws.freeze_panes = "A2"
-
+    wb.remove(wb.active)
+    build_storey_sheets(wb, storey_rows)
     build_import_sheet(wb)
 
     out_name = f"aktywne_plany_slownik_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
     out_path = os.path.join(SCRIPT_DIR, out_name)
     wb.save(out_path)
-    print(f"\nZapisano {len(rows)} wierszy do: {out_path}")
+    print(f"\nZapisano {total_tasks} zadań w {len(storey_rows)} arkuszach (piętrach) do: {out_path}")
 
 
 if __name__ == "__main__":
