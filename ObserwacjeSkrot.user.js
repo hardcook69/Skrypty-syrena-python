@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obserwacje – szybkie dodawanie z raportu dziennego
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.2
+// @version      1.3
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @description  Dodawanie obserwacji mieszkańcom bezpośrednio z okna "Edycja raportu: Dzienny" - zapisuje się na serwerze (POST /api/observation), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -127,7 +127,7 @@
     function createObservationField() {
         const div = document.createElement('div');
         div.contentEditable = 'true';
-        div.style.cssText = 'min-height:40px;border:1px solid #ccc;padding:4px;background:#fff;font-size:13px;box-sizing:border-box;margin-bottom:6px;';
+        div.style.cssText = 'min-height:40px;border:1px solid #ccc;padding:4px;background:#fff;font-size:13px;box-sizing:border-box;margin-bottom:6px;word-break:break-word;overflow-wrap:anywhere;';
 
         const prefixSpan = document.createElement('span');
         prefixSpan.textContent = ALERT_PREFIX;
@@ -288,7 +288,7 @@
                         o.observationConclusions
                     ].forEach((text) => {
                         const td = document.createElement('td');
-                        td.style.cssText = 'padding:4px;border:1px solid #ddd;vertical-align:top;';
+                        td.style.cssText = 'padding:4px;border:1px solid #ddd;vertical-align:top;word-break:break-word;overflow-wrap:anywhere;max-width:0;';
                         td.textContent = text;
                         tr.appendChild(td);
                     });
@@ -324,13 +324,13 @@
         wrap.appendChild(historyStatusEl);
 
         const table = document.createElement('table');
-        table.style.cssText = 'width:100%;border-collapse:collapse;';
+        table.style.cssText = 'width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;';
         const thead = document.createElement('thead');
         const headRow = document.createElement('tr');
         ['Mieszkaniec', 'Data', 'Treść', 'Wnioski'].forEach((h) => {
             const th = document.createElement('th');
             th.textContent = h;
-            th.style.cssText = 'padding:4px;border:1px solid #ddd;background:#eee;text-align:left;';
+            th.style.cssText = 'padding:4px;border:1px solid #ddd;background:#eee;text-align:left;word-break:break-word;overflow-wrap:anywhere;';
             headRow.appendChild(th);
         });
         thead.appendChild(headRow);
