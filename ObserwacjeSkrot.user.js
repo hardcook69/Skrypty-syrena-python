@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obserwacje – szybkie dodawanie z raportu dziennego
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.5
+// @version      1.6
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @description  Dodawanie obserwacji mieszkańcom bezpośrednio z okna "Edycja raportu: Dzienny" - zapisuje się na serwerze (POST /api/observation), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -344,13 +344,11 @@
     }
 
     // ---------- 3c. Wstrzykiwanie obu bloków w okno "Edycja raportu: Dzienny" ----------
-    // Renderowane w Shadow DOM z doczepionym Water.css (CDN) - izoluje style w obie strony
-    // (nic z frameworku nie wycieka na resztę strony SYRENA, nic ze SYRENY nie miesza się do
-    // frameworku), przy zachowaniu dziedziczenia fontu/koloru z otaczającej aplikacji (Shadow
-    // DOM blokuje reguły CSS, ale nie dziedziczone wartości obliczone). Brak taga "body" tutaj
-    // celowo - to widget wstrzykiwany W ramach istniejącej strony, nie osobne okno.
-    const WATER_CSS_URL = 'https://cdn.jsdelivr.net/npm/water.css@2/out/water.css';
-
+    // UWAGA: celowo BEZ Shadow DOM / Water.css. To okno raportu ma własny, obsługiwany
+    // przez JavaScript (DevExtreme) scroll - Shadow DOM w tym miejscu psuł przewijanie
+    // myszką całego raportu (prawdopodobnie retargeting zdarzeń wheel na granicy shadow
+    // roota gubił natywną obsługę scrolla appki). Zwykły wygląd inline jest tu bezpieczny
+    // funkcjonalnie, mimo że mniej efektowny niż w samodzielnym oknie zadań ad hoc.
     function tryInjectPanel() {
         if (document.getElementById('obs-skrot-panel')) return;
 
@@ -360,30 +358,15 @@
                 const section = el.closest('div');
                 if (!section || section.dataset.obsPanelInjected) continue;
 
-                const host = document.createElement('div');
-                host.id = 'obs-skrot-panel';
-                const shadow = host.attachShadow({ mode: 'open' });
-
-                const link = document.createElement('link');
-                link.rel = 'stylesheet';
-                link.href = WATER_CSS_URL;
-                shadow.appendChild(link);
-
-                const fixupStyle = document.createElement('style');
-                // Water.css robi z <table> element responsywny scroll-container (overflow-x:auto) -
-                // to w tym miejscu (widget wstrzykiwany W stronę, nie samodzielne okno) przechwytuje
-                // scroll myszką zamiast przepuszczać go do przewijania całego raportu. Wyłączamy to.
-                fixupStyle.textContent = 'input,select,textarea{border:1px solid #999;}'
-                    + 'table{overflow:visible !important;display:table !important;}';
-                shadow.appendChild(fixupStyle);
-
-                shadow.appendChild(buildHistoryTable());
-                shadow.appendChild(buildAddPanel());
+                const container = document.createElement('div');
+                container.id = 'obs-skrot-panel';
+                container.appendChild(buildHistoryTable());
+                container.appendChild(buildAddPanel());
 
                 section.dataset.obsPanelInjected = '1';
                 section.parentElement
-                    ? section.parentElement.insertBefore(host, section.nextSibling)
-                    : section.appendChild(host);
+                    ? section.parentElement.insertBefore(container, section.nextSibling)
+                    : section.appendChild(container);
 
                 ensureEmployeeId();
                 fetchAlertHistory();
