@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zadania ad hoc – dodawanie z przeglądarki
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.2
+// @version      1.3
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @description  Odpowiednik zadania_ad_hoc_gui.py w przeglądarce - wielu mieszkańców, zakres dat, powtarzalność, podgląd i wysyłka - zapisuje się na serwerze (POST /api/task), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -23,6 +23,7 @@
     const DEFAULT_PRIORITY = 2;
     const DEFAULT_STATUS = 3;
     const TASK_STATUS_LABELS = { 1: 'Nowe', 2: 'W trakcie', 3: 'Do wykonania', 4: 'Wykonane', 5: 'Anulowane', 6: 'Zawieszone' };
+    const PRIORITY_LABELS = { 1: 'Niski', 2: 'Średni', 3: 'Wysoki', 4: 'Najwyższy' };
     const STATUS_LABEL_TO_CODE = Object.fromEntries(Object.entries(TASK_STATUS_LABELS).map(([k, v]) => [v.toLowerCase(), Number(k)]));
     const DOW_LABELS = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Nie'];
     const ROOM_FIELD_CANDIDATES = ['roomId', 'room_id', 'executionRoomId', 'residenceRoomId', 'currentRoomId'];
@@ -468,7 +469,9 @@
         );
 
         const durationInput = el('input', { type: 'number', value: '15', style: 'width:60px;padding:3px;' });
-        const priorityInput = el('input', { type: 'number', value: String(DEFAULT_PRIORITY), style: 'width:50px;padding:3px;' });
+        const priorityInput = el('select', { style: 'padding:3px;' });
+        Object.entries(PRIORITY_LABELS).forEach(([code, label]) => priorityInput.appendChild(el('option', { value: code }, label)));
+        priorityInput.value = String(DEFAULT_PRIORITY);
         const statusSelect = el('select', { style: 'padding:3px;' });
         Object.entries(TASK_STATUS_LABELS).forEach(([code, label]) => statusSelect.appendChild(el('option', { value: code }, label)));
         statusSelect.value = String(DEFAULT_STATUS);
