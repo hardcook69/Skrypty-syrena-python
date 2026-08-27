@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obserwacje – szybkie dodawanie z raportu dziennego
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.4
+// @version      1.5
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @description  Dodawanie obserwacji mieszkańcom bezpośrednio z okna "Edycja raportu: Dzienny" - zapisuje się na serwerze (POST /api/observation), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -370,7 +370,11 @@
                 shadow.appendChild(link);
 
                 const fixupStyle = document.createElement('style');
-                fixupStyle.textContent = 'input,select,textarea{border:1px solid #999;}';
+                // Water.css robi z <table> element responsywny scroll-container (overflow-x:auto) -
+                // to w tym miejscu (widget wstrzykiwany W stronę, nie samodzielne okno) przechwytuje
+                // scroll myszką zamiast przepuszczać go do przewijania całego raportu. Wyłączamy to.
+                fixupStyle.textContent = 'input,select,textarea{border:1px solid #999;}'
+                    + 'table{overflow:visible !important;display:table !important;}';
                 shadow.appendChild(fixupStyle);
 
                 shadow.appendChild(buildHistoryTable());
