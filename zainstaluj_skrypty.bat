@@ -20,6 +20,7 @@ REM i podmien adres na link do kolejnego pliku .user.js w repo
 REM hardcook69/Syrena-Tempermokey.
 
 start "" chrome "https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/Wyzwalacz.user.js"
+start "" chrome "https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js"
 
 echo.
 echo ============================================================
