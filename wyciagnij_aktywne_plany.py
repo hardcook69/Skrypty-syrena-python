@@ -2,20 +2,25 @@
 # -*- coding: utf-8 -*-
 """
 Wyciąga z systemu SYRENA wszystkie AKTYWNE (uruchomione, planStatus=1) plany
-razem z ich usługami i zadaniami, i zapisuje jako słownik referencyjny do
-Excela — pogrupowany po mieszkańcu (nazwisko + imię), żeby przy wypełnianiu
-matrycy importu harmonogramów nie trzeba było zgadywać ID (PlanBazowyId,
-ServiceKindId, TaskKindId), tylko znaleźć właściwy wiersz po nazwisku.
+razem z ich usługami, zadaniami i ISTNIEJĄCYMI WYZWALACZAMI (godziny/dni,
+tak jak w zakładce "3 Harmonogramy" w harmonogramy_gui.py), i zapisuje jeden
+plik Excel z dwoma arkuszami:
 
-Pokój mieszkańca jest dołączany jako pomocnicza kolumna do odróżnienia dwóch
-osób o tym samym imieniu i nazwisku — best-effort, dwa źródła po kolei:
-  1. pole w samym obiekcie planu, jeśli API je tam umieszcza (szukane po
-     nazwie klucza zawierającej "room"/"pokoj" — nazwa pola niepotwierdzona)
-  2. GET :5020/api/beneficiary-residence/by-beneficiary-id/{visitorId} —
-     zakłada, że visitorId (używany przez /api/plan, /api/service) to ten
-     sam numer co beneficiaryId (używany przez usługi/obserwacje). TO
-     ZAŁOŻENIE NIE JEST POTWIERDZONE — jeśli się nie sprawdzi, kolumna
-     Pokoj zostanie po prostu pusta dla tego wiersza (log ostrzega o tym raz).
+  "ObecnyStan" — czytelny słownik referencyjny: co dany mieszkaniec już ma
+                 (usługi, zadania, harmonogramy z godzinami), pogrupowane po
+                 nazwisku, z pokojem jako pomocniczą kolumną do odróżnienia
+                 dwóch osób o tym samym imieniu i nazwisku.
+  "Import"     — pusta matryca do wypełnienia (ten sam układ co
+                 matryca_import_harmonogramow.xlsx) — kopiuj z arkusza
+                 "ObecnyStan" właściwe ID, wklejaj do "Import" żeby dodać
+                 nowe usługi/zadania/harmonogramy odpowiedniej osobie.
+
+Pokój mieszkańca — best-effort, dwa źródła po kolei (patrz find_room_best_effort).
+
+DIAGNOSTYKA: przy pierwszych 2 planach zapisuje surowy JSON (plan + pierwsza
+usługa + pierwsze zadanie) do debug_pierwszy_rekord.json — to pozwala
+sprawdzić PRAWDZIWE nazwy pól zamiast zgadywać (poprzednia wersja zgadła
+źle nazwiska mieszkańca i TaskKindId — wyszły puste na produkcji).
 
 Tylko odczyt (same GET) — bezpieczne do uruchamiania bez ograniczeń.
 
@@ -28,8 +33,8 @@ import time
 import getpass
 import logging
 import os
-from datetime import datetime
 import json
+from datetime import datetime
 
 try:
     import requests
@@ -46,11 +51,38 @@ except ImportError:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_NAME = sys.argv[1] if len(sys.argv) > 1 else "config_testowy.json"
 CONFIG_PATH = os.path.join(SCRIPT_DIR, CONFIG_NAME)
+DEBUG_JSON_PATH = os.path.join(SCRIPT_DIR, "debug_pierwszy_rekord.json")
 TIMEOUT = 20
+
 ROOM_FIELD_CANDIDATES = ("roomId", "room_id", "roomName", "executionRoomId",
                           "residenceRoomId", "currentRoomId")
+NAME_CANDIDATES = (("visitorSurname", "visitorFirstName"),
+                    ("beneficiarySurname", "beneficiaryFirstName"),
+                    ("surname", "firstName"))
+TASK_KIND_ID_CANDIDATES = ("taskKindId", "taskDefinitionKindId", "kindId")
 
 logger = logging.getLogger("wyciagnij_aktywne_plany")
+
+DOW_PL = ["Nd.", "Pon.", "Wt.", "Śr.", "Czw.", "Pt.", "Sob."]
+DOW_EN = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+
+
+def human_cron(cron):
+    """Kopia human_cron() z harmonogramy_gui.py — spójne formatowanie."""
+    if not cron:
+        return ""
+    p = cron.split()
+    if len(p) < 6:
+        return cron
+    _, mn, hr, dom, mon, dow = p[:6]
+    if dow not in ("*", "?"):
+        return f"{dow}  {hr}:{mn.zfill(2)}"
+    if dom != "?" and "/" in dom:
+        s, n = dom.split("/")
+        return f"co {n}d od {s}.  {hr}:{mn.zfill(2)}"
+    if dom not in ("?", "*") and mon not in ("*", "?"):
+        return f"{dom} {mon}  {hr}:{mn.zfill(2)}"
+    return f"codz.  {hr}:{mn.zfill(2)}"
 
 
 def load_cfg():
@@ -142,13 +174,24 @@ class Client:
 
 
 def fetch_active_plans(client, org_id):
-    d, e = client._get(client.cfg["shift_url"], "/api/plan/by-visitor-organization-id/paged",
-                        {"page": 1, "pageSize": 500, "orderBy": "id", "ascending": "true",
-                         "planStatus": 1, "visitorType": 3})
-    if e:
-        logger.error(f"Błąd pobierania planów: {e}")
-        return []
-    return d.get("results", []) if isinstance(d, dict) else []
+    all_plans, page = [], 1
+    while True:
+        d, e = client._get(client.cfg["shift_url"], "/api/plan/by-visitor-organization-id/paged",
+                            {"page": page, "pageSize": 200, "orderBy": "id", "ascending": "true",
+                             "planStatus": 1, "visitorType": 3})
+        if e:
+            logger.error(f"Błąd pobierania planów str.{page}: {e}")
+            break
+        items = d.get("results", []) if isinstance(d, dict) else []
+        all_plans.extend(items)
+        total_pages = d.get("totalNumberOfPages") if isinstance(d, dict) else None
+        if total_pages is not None:
+            if page >= total_pages:
+                break
+        elif len(items) < 200:
+            break
+        page += 1
+    return all_plans
 
 
 def fetch_services(client, plan_id):
@@ -167,13 +210,39 @@ def fetch_tasks(client, service_id):
     return d if isinstance(d, list) else []
 
 
+def fetch_triggers(client, task_def_id):
+    d, e = client._get(client.cfg["shift_url"], f"/api/schedule-trigger/by-task-definition-id/{task_def_id}")
+    if e:
+        logger.warning(f"Wyzwalacze zadania {task_def_id}: {e}")
+        return []
+    return d if isinstance(d, list) else []
+
+
+def extract_name(plan):
+    for surname_key, firstname_key in NAME_CANDIDATES:
+        surname = (plan.get(surname_key) or "").strip()
+        firstname = (plan.get(firstname_key) or "").strip()
+        combined = f"{surname} {firstname}".strip()
+        if combined:
+            return combined, f"{surname_key}/{firstname_key}"
+    return f"(brak nazwiska, visitorId={plan.get('visitorId')})", None
+
+
+def extract_task_kind_id(task):
+    for key in TASK_KIND_ID_CANDIDATES:
+        v = task.get(key)
+        if v not in (None, ""):
+            return v, key
+    return "", None
+
+
 _room_cache = {}
 _room_fallback_warned = False
 
 
 def find_room_best_effort(client, plan):
     """Zwraca (pokoj_string, zrodlo) albo (None, None). Best-effort, patrz
-    docstring modułu — kolejność źródeł i ostrzeżenie o niepewności."""
+    docstring modułu."""
     global _room_fallback_warned
     for key in ROOM_FIELD_CANDIDATES:
         v = plan.get(key)
@@ -206,6 +275,30 @@ def find_room_best_effort(client, plan):
     return None, None
 
 
+def build_import_sheet(wb):
+    """Ten sam układ co matryca_import_harmonogramow.xlsx - pusta, gotowa do
+    wypełnienia (wartości kopiowane z arkusza ObecnyStan)."""
+    headers = [
+        "GrupaPlanu", "PeselMieszkanca", "PlanBazowyId", "NowaNazwaPlanu",
+        "ServiceKindId", "TaskKindId", "CzasNormatywny(min)", "Priorytet(1-4)",
+        "WyzwalaczNazwa", "Tryb",
+        "Godzina(0-23)", "Minuta(0-59)", "DniTygodnia", "DzienMiesiaca(1-31)",
+        "Miesiac", "KtoreWystapienie(1-5)", "RokOd", "RokDo",
+        "UruchomPlanPoImporcie(TAK/NIE)",
+    ]
+    widths = [11, 16, 12, 22, 13, 11, 18, 14, 20, 22, 13, 12, 26, 18, 12, 19, 8, 8, 26]
+    ws = wb.create_sheet("Import")
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1B5E20")
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+    ws.row_dimensions[1].height = 42
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+
 def main():
     logging.basicConfig(level=logging.DEBUG, encoding="utf-8",
                          format="%(asctime)s %(levelname)s %(message)s")
@@ -232,71 +325,83 @@ def main():
     plans = fetch_active_plans(client, org_id)
     print(f"Znaleziono {len(plans)} aktywnych planów.")
 
+    debug_records = []
     rows = []
+    name_source_seen = set()
+    taskkind_source_seen = set()
+
     for i, plan in enumerate(plans, 1):
         plan_id = plan.get("id")
-        surname = (plan.get("visitorSurname") or "").strip()
-        firstname = (plan.get("visitorFirstName") or "").strip()
-        resident = f"{surname} {firstname}".strip() or f"(brak nazwiska, visitorId={plan.get('visitorId')})"
+        resident, name_src = extract_name(plan)
+        name_source_seen.add(name_src)
         room, room_src = find_room_best_effort(client, plan)
         print(f"  [{i}/{len(plans)}] Plan {plan_id} — {resident}")
 
         services = fetch_services(client, plan_id)
         time.sleep(delay)
+        base_row = {
+            "Mieszkaniec": resident, "Pokoj": room or "",
+            "PlanId": plan_id, "NazwaPlanu": plan.get("name", ""),
+            "WaznyOd": (plan.get("validFrom") or "")[:10], "WaznyDo": (plan.get("validTo") or "")[:10],
+        }
         if not services:
-            rows.append({
-                "Mieszkaniec": resident, "Pokoj": room or "",
-                "PlanId": plan_id, "NazwaPlanu": plan.get("name", ""),
-                "WaznyOd": (plan.get("validFrom") or "")[:10], "WaznyDo": (plan.get("validTo") or "")[:10],
-                "ServiceKindId": "", "NazwaUslugi": "(brak usług)",
-                "TaskKindId": "", "NazwaZadania": "", "CzasNormatywny": "",
-            })
+            rows.append({**base_row, "ServiceKindId": "", "NazwaUslugi": "(brak usług)",
+                         "TaskKindId": "", "NazwaZadania": "", "CzasNormatywny": "", "Wyzwalacze": ""})
             continue
 
-        for svc in services:
+        for si, svc in enumerate(services):
             tasks = fetch_tasks(client, svc["id"])
             time.sleep(delay)
+            if len(debug_records) < 2 and si == 0:
+                debug_records.append({"plan": plan, "service": svc, "task": tasks[0] if tasks else None})
             if not tasks:
-                rows.append({
-                    "Mieszkaniec": resident, "Pokoj": room or "",
-                    "PlanId": plan_id, "NazwaPlanu": plan.get("name", ""),
-                    "WaznyOd": (plan.get("validFrom") or "")[:10], "WaznyDo": (plan.get("validTo") or "")[:10],
-                    "ServiceKindId": svc.get("serviceKindId", ""),
-                    "NazwaUslugi": svc.get("serviceKindName", ""),
-                    "TaskKindId": "", "NazwaZadania": "(brak zadań)", "CzasNormatywny": "",
-                })
+                rows.append({**base_row, "ServiceKindId": svc.get("serviceKindId", ""),
+                             "NazwaUslugi": svc.get("serviceKindName", ""),
+                             "TaskKindId": "", "NazwaZadania": "(brak zadań)",
+                             "CzasNormatywny": "", "Wyzwalacze": ""})
                 continue
             for t in tasks:
-                rows.append({
-                    "Mieszkaniec": resident, "Pokoj": room or "",
-                    "PlanId": plan_id, "NazwaPlanu": plan.get("name", ""),
-                    "WaznyOd": (plan.get("validFrom") or "")[:10], "WaznyDo": (plan.get("validTo") or "")[:10],
-                    "ServiceKindId": svc.get("serviceKindId", ""),
-                    "NazwaUslugi": svc.get("serviceKindName", ""),
-                    "TaskKindId": t.get("taskKindId", ""),
-                    "NazwaZadania": t.get("taskKindName", ""),
-                    "CzasNormatywny": t.get("normativeTime", ""),
-                })
+                triggers = fetch_triggers(client, t["id"])
+                time.sleep(delay)
+                tkid, tk_src = extract_task_kind_id(t)
+                taskkind_source_seen.add(tk_src)
+                trig_txt = "; ".join(
+                    f"{tr.get('name', '?')}: {human_cron(tr.get('cron', ''))}" for tr in triggers
+                ) or "(brak harmonogramu)"
+                rows.append({**base_row, "ServiceKindId": svc.get("serviceKindId", ""),
+                             "NazwaUslugi": svc.get("serviceKindName", ""),
+                             "TaskKindId": tkid,
+                             "NazwaZadania": t.get("taskKindName", ""),
+                             "CzasNormatywny": t.get("normativeTime", ""),
+                             "Wyzwalacze": trig_txt})
+
+    with open(DEBUG_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(debug_records, f, ensure_ascii=False, indent=2, default=str)
+    print(f"Zrzut surowego JSON (do diagnostyki pól): {DEBUG_JSON_PATH}")
+    print(f"Źródła nazwiska użyte w tym przebiegu: {name_source_seen}")
+    print(f"Źródła TaskKindId użyte w tym przebiegu: {taskkind_source_seen}")
 
     rows.sort(key=lambda r: (r["Mieszkaniec"].lower(), r["PlanId"] or 0,
                               r["ServiceKindId"] if isinstance(r["ServiceKindId"], int) else 0,
                               r["TaskKindId"] if isinstance(r["TaskKindId"], int) else 0))
 
     headers = ["Mieszkaniec", "Pokoj", "PlanId", "NazwaPlanu", "WaznyOd", "WaznyDo",
-               "ServiceKindId", "NazwaUslugi", "TaskKindId", "NazwaZadania", "CzasNormatywny"]
+               "ServiceKindId", "NazwaUslugi", "TaskKindId", "NazwaZadania", "CzasNormatywny", "Wyzwalacze"]
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "AktywnePlany"
+    ws.title = "ObecnyStan"
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1B5E20")
     for r in rows:
         ws.append([r[h] for h in headers])
-    widths = [24, 10, 9, 26, 12, 12, 13, 26, 11, 26, 15]
+    widths = [24, 10, 9, 26, 12, 12, 13, 26, 11, 26, 15, 40]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
+
+    build_import_sheet(wb)
 
     out_name = f"aktywne_plany_slownik_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
     out_path = os.path.join(SCRIPT_DIR, out_name)
