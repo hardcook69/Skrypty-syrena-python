@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zadania ad hoc – dodawanie z przeglądarki
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.0
+// @version      1.1
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @description  Odpowiednik zadania_ad_hoc_gui.py w przeglądarce - wielu mieszkańców, zakres dat, powtarzalność, podgląd i wysyłka - zapisuje się na serwerze (POST /api/task), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -214,10 +214,11 @@
         modalEls.log.scrollTop = modalEls.log.scrollHeight;
     }
 
-    function buildResidentSection() {
+    function buildResidentSection(preselectName) {
         const filterInput = el('input', { type: 'text', placeholder: 'Filtruj...', style: 'width:100%;margin-bottom:4px;padding:4px;box-sizing:border-box;' });
         const listDiv = el('div', { style: 'max-height:220px;overflow-y:auto;border:1px solid #ccc;padding:4px;' });
         const countLbl = el('span', { style: 'font-size:12px;color:#666;margin-left:8px;' }, '0 zaznaczonych');
+        const preselectLbl = el('div', { style: 'font-size:12px;color:#b45309;margin-bottom:4px;' }, '');
 
         function renderList(filterText) {
             listDiv.innerHTML = '';
@@ -246,11 +247,25 @@
                     residents.sort((a, b) => residentLabel(a).toLowerCase().localeCompare(residentLabel(b).toLowerCase()));
                     state.residents = residents;
                     statusLbl.textContent = residents.length + ' aktywnych';
+                    if (preselectName) {
+                        const match = residents.find((r) => residentLabel(r).toLowerCase() === preselectName.toLowerCase());
+                        if (match) {
+                            state.selectedResidentIds.add(match.id);
+                            preselectLbl.textContent = '✓ Zaznaczono automatycznie: ' + residentLabel(match);
+                        } else {
+                            preselectLbl.textContent = '⚠ Nie znaleziono dokładnego dopasowania dla „' + preselectName + '” — zaznacz ręcznie.';
+                        }
+                    }
                     renderList(filterInput.value);
+                    countLbl.textContent = state.selectedResidentIds.size + ' zaznaczonych';
                     logMsg('Pobrano ' + residents.length + ' aktywnych mieszkańców', 'ok');
                 }).catch((e) => { statusLbl.textContent = 'Błąd'; logMsg('Błąd pobierania mieszkańców: ' + e.message, 'err'); });
             }
         }, '↓ Pobierz mieszkańców');
+        if (preselectName) {
+            preselectLbl.textContent = 'Wczytywanie mieszkańca „' + preselectName + '”...';
+            setTimeout(() => loadBtn.click(), 0);
+        }
 
         const allBtn = el('button', { type: 'button', style: 'padding:2px 8px;cursor:pointer;margin-right:4px;', onclick: () => {
             state.residents.forEach((r) => state.selectedResidentIds.add(r.id));
@@ -263,6 +278,7 @@
 
         return el('fieldset', { style: 'border:1px solid #ccc;padding:8px;margin-bottom:8px;' },
             el('legend', {}, 'Mieszkańcy (wielokrotny wybór)'),
+            preselectLbl,
             el('div', { style: 'margin-bottom:4px;' }, loadBtn, statusLbl),
             filterInput, listDiv,
             el('div', { style: 'margin-top:4px;' }, allBtn, noneBtn, countLbl)
@@ -610,14 +626,18 @@
     }
 
     // ---------- Modal ogólny ----------
-    function buildModal() {
+    function buildModal(preselectName) {
+        if (preselectName) {
+            state.selectedResidentIds.clear();
+        }
         const backdrop = el('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:99998;display:flex;align-items:center;justify-content:center;' });
         const panel = el('div', { style: 'background:#fff;width:900px;max-width:95vw;max-height:92vh;overflow-y:auto;border-radius:8px;padding:16px;font-family:Segoe UI,Arial,sans-serif;font-size:13px;' });
 
         const closeBtn = el('button', { type: 'button', style: 'float:right;padding:4px 10px;cursor:pointer;', onclick: () => backdrop.remove() }, 'Zamknij ✕');
-        panel.appendChild(el('div', {}, el('h2', { style: 'margin:0 0 8px 0;font-size:16px;display:inline-block;' }, '🗓️ Zadania ad hoc (Tampermonkey)'), closeBtn));
+        const titleText = preselectName ? '🗓️ Zadania ad hoc dla: ' + preselectName + ' (Tampermonkey)' : '🗓️ Zadania ad hoc (Tampermonkey)';
+        panel.appendChild(el('div', {}, el('h2', { style: 'margin:0 0 8px 0;font-size:16px;display:inline-block;' }, titleText), closeBtn));
 
-        panel.appendChild(buildResidentSection());
+        panel.appendChild(buildResidentSection(preselectName));
         panel.appendChild(buildKindSection());
         panel.appendChild(buildRoomSection());
         panel.appendChild(buildScheduleSection());
@@ -646,20 +666,59 @@
         document.body.appendChild(backdrop);
     }
 
-    // ---------- Przycisk uruchamiający ----------
+    // ---------- Przycisk uruchamiający (globalny, widoczny cały czas) ----------
     function addTriggerButton() {
         if (document.getElementById('adhoc-skrot-trigger')) return;
         const btn = el('button', {
             id: 'adhoc-skrot-trigger',
             type: 'button',
-            style: 'position:fixed;bottom:16px;right:16px;z-index:99997;padding:10px 14px;border-radius:20px;background:#2e7d32;color:#fff;border:none;cursor:pointer;font-size:13px;box-shadow:0 2px 6px rgba(0,0,0,0.3);',
-            onclick: buildModal
+            style: 'position:fixed;top:70px;right:16px;z-index:99997;padding:12px 18px;border-radius:24px;'
+                + 'background:#1b5e20;color:#fff;border:2px solid #fff;cursor:pointer;font-size:14px;font-weight:bold;'
+                + 'box-shadow:0 3px 10px rgba(0,0,0,0.45);',
+            onclick: () => buildModal()
         }, '🗓️ Zadania ad hoc');
         document.body.appendChild(btn);
     }
 
+    // ---------- Przycisk per wiersz mieszkańca, obok natywnego "Dodaj zadanie" ----------
+    // Namierza aba-button z tekstem "Dodaj zadanie" (widoczny w master-detail sekcji
+    // "Zadania ad hoc" na stronie Usługi mieszkańców), wraca do wiersza planu, z którego
+    // ta sekcja się rozwinęła, i czyta Nazwisko/Imię z jego kolumn (aria-colindex 6/7).
+    function findResidentNameForDetailButton(btnEl) {
+        const detailRow = btnEl.closest('tr.dx-master-detail-row');
+        if (!detailRow) return null;
+        let sib = detailRow.previousElementSibling;
+        while (sib && !sib.classList.contains('dx-data-row')) sib = sib.previousElementSibling;
+        if (!sib) return null;
+        const surnameTd = sib.querySelector('td[aria-colindex="6"]');
+        const firstNameTd = sib.querySelector('td[aria-colindex="7"]');
+        if (!surnameTd) return null;
+        const surname = (surnameTd.textContent || '').trim();
+        const firstName = (firstNameTd ? firstNameTd.textContent || '' : '').trim();
+        return (surname + ' ' + firstName).trim() || null;
+    }
+
+    function injectRowButtons() {
+        document.querySelectorAll('aba-button').forEach((aba) => {
+            const dxBtn = aba.querySelector('dx-button[aria-label="Dodaj zadanie"]');
+            if (!dxBtn || aba.dataset.adhocSkrotDone) return;
+            aba.dataset.adhocSkrotDone = '1';
+            const name = findResidentNameForDetailButton(aba);
+            if (!name) return;
+            const shortcutBtn = el('button', {
+                type: 'button',
+                style: 'margin-left:6px;padding:4px 10px;border-radius:4px;background:#1b5e20;color:#fff;border:none;cursor:pointer;font-size:12px;',
+                title: 'Dodaj zadania ad hoc z harmonogramem (Tampermonkey) dla: ' + name,
+                onclick: () => buildModal(name)
+            }, '🗓️ Harmonogram (TM)');
+            aba.parentElement.appendChild(shortcutBtn);
+        });
+    }
+
     function start() {
         addTriggerButton();
+        new MutationObserver(injectRowButtons).observe(document.body, { childList: true, subtree: true });
+        injectRowButtons();
     }
 
     if (document.body) start();
