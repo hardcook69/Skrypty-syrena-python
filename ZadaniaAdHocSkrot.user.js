@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zadania ad hoc – dodawanie z przeglądarki
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.3
+// @version      1.4
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @description  Odpowiednik zadania_ad_hoc_gui.py w przeglądarce - wielu mieszkańców, zakres dat, powtarzalność, podgląd i wysyłka - zapisuje się na serwerze (POST /api/task), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -667,6 +667,12 @@
         const host = document.createElement('div');
         const shadow = host.attachShadow({ mode: 'open' });
         shadow.appendChild(el('link', { rel: 'stylesheet', href: WATER_CSS_URL }));
+        // Water.css zakłada, że `body` to zwykła strona z tekstem (nadaje mu max-width +
+        // margin:auto do wyśrodkowania kolumny treści) - to koliduje z użyciem go tutaj jako
+        // pełnoekranowego, flexboxowego tła okna. Nadpisujemy to jawnie, plus wzmacniamy
+        // zbyt subtelny domyślny obrys pól formularza.
+        shadow.appendChild(el('style', {}, 'body{margin:0;max-width:none;width:100vw;height:100vh;}'
+            + 'input,select,textarea{border:1px solid #999;}'));
 
         const backdrop = el('body', { style: 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:99998;display:flex;align-items:center;justify-content:center;margin:0;' });
         const panel = el('div', { style: 'background:#fff;width:900px;max-width:95vw;max-height:92vh;overflow-y:auto;border-radius:8px;padding:16px;font-family:Segoe UI,Arial,sans-serif;font-size:13px;' });
