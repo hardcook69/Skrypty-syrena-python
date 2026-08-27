@@ -11,7 +11,7 @@ echo Kliknij "Dodaj do Chrome" (pomin, jesli juz masz Tampermonkey).
 echo.
 pause
 
-start "" chrome "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"
+start "" "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"
 
 echo.
 echo ============================================================
