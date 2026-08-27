@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zadania ad hoc – dodawanie z przeglądarki
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.1
+// @version      1.2
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js
 // @description  Odpowiednik zadania_ad_hoc_gui.py w przeglądarce - wielu mieszkańców, zakres dat, powtarzalność, podgląd i wysyłka - zapisuje się na serwerze (POST /api/task), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -219,6 +219,7 @@
         const listDiv = el('div', { style: 'max-height:220px;overflow-y:auto;border:1px solid #ccc;padding:4px;' });
         const countLbl = el('span', { style: 'font-size:12px;color:#666;margin-left:8px;' }, '0 zaznaczonych');
         const preselectLbl = el('div', { style: 'font-size:12px;color:#b45309;margin-bottom:4px;' }, '');
+        const expandToggle = el('a', { href: '#', style: 'font-size:12px;display:none;' }, 'Zmień wybór / pokaż pełną listę');
 
         function renderList(filterText) {
             listDiv.innerHTML = '';
@@ -252,6 +253,8 @@
                         if (match) {
                             state.selectedResidentIds.add(match.id);
                             preselectLbl.textContent = '✓ Zaznaczono automatycznie: ' + residentLabel(match);
+                            expandableWrap.style.display = 'none';
+                            expandToggle.style.display = 'inline';
                         } else {
                             preselectLbl.textContent = '⚠ Nie znaleziono dokładnego dopasowania dla „' + preselectName + '” — zaznacz ręcznie.';
                         }
@@ -276,12 +279,22 @@
             renderList(filterInput.value); countLbl.textContent = '0 zaznaczonych';
         } }, 'Nikt');
 
-        return el('fieldset', { style: 'border:1px solid #ccc;padding:8px;margin-bottom:8px;' },
-            el('legend', {}, 'Mieszkańcy (wielokrotny wybór)'),
-            preselectLbl,
+        expandToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            expandableWrap.style.display = '';
+            expandToggle.style.display = 'none';
+        });
+
+        var expandableWrap = el('div', {},
             el('div', { style: 'margin-bottom:4px;' }, loadBtn, statusLbl),
             filterInput, listDiv,
             el('div', { style: 'margin-top:4px;' }, allBtn, noneBtn, countLbl)
+        );
+
+        return el('fieldset', { style: 'border:1px solid #ccc;padding:8px;margin-bottom:8px;' },
+            el('legend', {}, 'Mieszkańcy (wielokrotny wybór)'),
+            preselectLbl, expandToggle,
+            expandableWrap
         );
     }
 
@@ -418,17 +431,28 @@
         const everyNInput = el('input', { type: 'number', min: '1', value: '1', style: 'width:50px;padding:3px;' });
         const dowChecks = {};
         const dowRow = el('div', { style: 'display:flex;gap:4px;margin-left:8px;' });
+        function styleDowBtn(btn) {
+            btn.style.cssText = 'padding:4px 9px;font-size:12px;border-radius:4px;border:1px solid #1b5e20;'
+                + (btn.checked ? 'background:#1b5e20;color:#fff;cursor:pointer;' : 'background:#fff;color:#1b5e20;cursor:pointer;')
+                + (btn.disabled ? 'opacity:0.35;cursor:default;' : '');
+        }
         DOW_LABELS.forEach((label, i) => {
-            const cb = el('input', { type: 'checkbox' });
-            cb.checked = i < 5;
-            cb.disabled = true;
-            dowChecks[i] = cb;
-            dowRow.appendChild(el('label', { style: 'font-size:12px;' }, cb, ' ' + label));
+            const btn = el('button', { type: 'button' }, label);
+            btn.checked = i < 5;
+            btn.disabled = true;
+            btn.addEventListener('click', () => {
+                if (btn.disabled) return;
+                btn.checked = !btn.checked;
+                styleDowBtn(btn);
+            });
+            styleDowBtn(btn);
+            dowChecks[i] = btn;
+            dowRow.appendChild(btn);
         });
         function updateFreqEnabled() {
             const weekdaysMode = weekdaysRadio.checked;
             everyNInput.disabled = weekdaysMode;
-            Object.values(dowChecks).forEach((cb) => (cb.disabled = !weekdaysMode));
+            Object.values(dowChecks).forEach((btn) => { btn.disabled = !weekdaysMode; styleDowBtn(btn); });
         }
         everyRadio.addEventListener('change', updateFreqEnabled);
         weekdaysRadio.addEventListener('change', updateFreqEnabled);
@@ -626,14 +650,25 @@
     }
 
     // ---------- Modal ogólny ----------
+    // Renderowany w Shadow DOM z doczepionym Water.css (CDN) - klasyczny "classless"
+    // framework style'uje gołe znaczniki (body/button/input/table...), więc bez izolacji
+    // zepsułby wygląd całej aplikacji SYRENA. Shadow root nie przepuszcza stylów w żadną
+    // stronę. Element-wrapper nazwany "body" (poza realnym dokumentem, ale z tagName BODY)
+    // to zwykły trik żeby selektor `body {...}` z frameworku miał się do czego przyczepić.
+    const WATER_CSS_URL = 'https://cdn.jsdelivr.net/npm/water.css@2/out/water.css';
+
     function buildModal(preselectName) {
         if (preselectName) {
             state.selectedResidentIds.clear();
         }
-        const backdrop = el('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:99998;display:flex;align-items:center;justify-content:center;' });
+        const host = document.createElement('div');
+        const shadow = host.attachShadow({ mode: 'open' });
+        shadow.appendChild(el('link', { rel: 'stylesheet', href: WATER_CSS_URL }));
+
+        const backdrop = el('body', { style: 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:99998;display:flex;align-items:center;justify-content:center;margin:0;' });
         const panel = el('div', { style: 'background:#fff;width:900px;max-width:95vw;max-height:92vh;overflow-y:auto;border-radius:8px;padding:16px;font-family:Segoe UI,Arial,sans-serif;font-size:13px;' });
 
-        const closeBtn = el('button', { type: 'button', style: 'float:right;padding:4px 10px;cursor:pointer;', onclick: () => backdrop.remove() }, 'Zamknij ✕');
+        const closeBtn = el('button', { type: 'button', style: 'float:right;padding:4px 10px;cursor:pointer;', onclick: () => host.remove() }, 'Zamknij ✕');
         const titleText = preselectName ? '🗓️ Zadania ad hoc dla: ' + preselectName + ' (Tampermonkey)' : '🗓️ Zadania ad hoc (Tampermonkey)';
         panel.appendChild(el('div', {}, el('h2', { style: 'margin:0 0 8px 0;font-size:16px;display:inline-block;' }, titleText), closeBtn));
 
@@ -662,8 +697,9 @@
         panel.appendChild(el('div', { style: 'margin-top:6px;' }, el('div', { style: 'font-weight:bold;' }, 'Log'), log));
 
         backdrop.appendChild(panel);
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
-        document.body.appendChild(backdrop);
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) host.remove(); });
+        shadow.appendChild(backdrop);
+        document.body.appendChild(host);
     }
 
     // ---------- Przycisk uruchamiający (globalny, widoczny cały czas) ----------
@@ -672,9 +708,9 @@
         const btn = el('button', {
             id: 'adhoc-skrot-trigger',
             type: 'button',
-            style: 'position:fixed;top:70px;right:16px;z-index:99997;padding:12px 18px;border-radius:24px;'
-                + 'background:#1b5e20;color:#fff;border:2px solid #fff;cursor:pointer;font-size:14px;font-weight:bold;'
-                + 'box-shadow:0 3px 10px rgba(0,0,0,0.45);',
+            style: 'position:fixed;top:70px;right:16px;z-index:99997;padding:16px 24px;border-radius:28px;'
+                + 'background:#1b5e20;color:#fff;border:3px solid #fff;cursor:pointer;font-size:17px;font-weight:bold;'
+                + 'box-shadow:0 3px 12px rgba(0,0,0,0.5);',
             onclick: () => buildModal()
         }, '🗓️ Zadania ad hoc');
         document.body.appendChild(btn);
@@ -707,7 +743,7 @@
             if (!name) return;
             const shortcutBtn = el('button', {
                 type: 'button',
-                style: 'margin-left:6px;padding:4px 10px;border-radius:4px;background:#1b5e20;color:#fff;border:none;cursor:pointer;font-size:12px;',
+                style: 'margin-left:8px;padding:9px 16px;border-radius:6px;background:#1b5e20;color:#fff;border:none;cursor:pointer;font-size:15px;font-weight:bold;box-shadow:0 2px 5px rgba(0,0,0,0.35);',
                 title: 'Dodaj zadania ad hoc z harmonogramem (Tampermonkey) dla: ' + name,
                 onclick: () => buildModal(name)
             }, '🗓️ Harmonogram (TM)');
