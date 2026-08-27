@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obserwacje – szybkie dodawanie z raportu dziennego
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.0
+// @version      1.1
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @description  Dodawanie obserwacji mieszkańcom bezpośrednio z okna "Edycja raportu: Dzienny" - zapisuje się na serwerze (POST /api/observation), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -51,7 +51,7 @@
                         if (Array.isArray(rb.requiredMonitoringBeneficiaryListItem)) {
                             currentResidentEntries = rb.requiredMonitoringBeneficiaryListItem;
                             resolveResidentNames();
-                            refreshSelectOptions();
+                            refreshTableRows();
                         }
                     }
                 }
@@ -94,85 +94,90 @@
                     if (Array.isArray(arr) && arr[0]) {
                         const b = arr[0];
                         residentNames[id] = (b.surname + ' ' + b.firstName).trim() || ('ID ' + id);
-                        refreshSelectOptions();
+                        refreshTableRows();
                     }
                 })
                 .catch(() => {});
         });
     }
 
-    // ---------- 3. Panel wstrzykiwany w okno "Edycja raportu: Dzienny" ----------
-    let selectEl = null;
-    let statusEl = null;
+    // ---------- 3. Tabela wstrzykiwana w okno "Edycja raportu: Dzienny" ----------
+    const ALERT_PREFIX = 'Alert(raport dzień/noc): ';
+    let tableBodyEl = null;
+    const rowRefs = {}; // beneficiaryId -> {nameCell, editableSpan, conclusionsEl, statusEl}
 
-    function refreshSelectOptions() {
-        if (!selectEl) return;
-        const prevValue = selectEl.value;
-        selectEl.innerHTML = '';
-        currentResidentEntries.forEach((entry) => {
-            (entry.beneficiaryIds || []).forEach((id) => {
-                const opt = document.createElement('option');
-                opt.value = id;
-                opt.textContent = (residentNames[id] || ('ID ' + id)) + ' (przyczyna nadzoru: ' + entry.guardianshipReasonId + ')';
-                selectEl.appendChild(opt);
-            });
-        });
-        if (prevValue) selectEl.value = prevValue;
+    function createObservationField() {
+        const div = document.createElement('div');
+        div.contentEditable = 'true';
+        div.style.cssText = 'min-height:40px;border:1px solid #ccc;padding:4px;background:#fff;font-size:13px;';
+
+        const prefixSpan = document.createElement('span');
+        prefixSpan.textContent = ALERT_PREFIX;
+        prefixSpan.style.color = '#999';
+        prefixSpan.contentEditable = 'false';
+        div.appendChild(prefixSpan);
+
+        const editableSpan = document.createElement('span');
+        editableSpan.style.color = '#000';
+        div.appendChild(editableSpan);
+
+        return { div, editableSpan };
     }
 
-    function buildPanel() {
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'margin:10px 0;padding:10px;border:1px solid #ccc;border-radius:6px;background:#fafafa;font-size:13px;';
+    function buildRow(beneficiaryId, guardianshipReasonId) {
+        const tr = document.createElement('tr');
 
-        const title = document.createElement('div');
-        title.textContent = '📝 Dodaj obserwację (Tampermonkey)';
-        title.style.cssText = 'font-weight:bold;margin-bottom:6px;';
-        wrap.appendChild(title);
+        const nameTd = document.createElement('td');
+        nameTd.style.cssText = 'padding:4px;border:1px solid #ddd;vertical-align:top;';
+        nameTd.textContent = residentNames[beneficiaryId] || ('ID ' + beneficiaryId);
+        tr.appendChild(nameTd);
 
-        selectEl = document.createElement('select');
-        selectEl.style.cssText = 'width:100%;margin-bottom:6px;padding:4px;';
-        wrap.appendChild(selectEl);
+        const historyTd = document.createElement('td');
+        historyTd.style.cssText = 'padding:4px;border:1px solid #ddd;vertical-align:top;color:#999;font-size:12px;';
+        historyTd.textContent = 'brak podglądu (czeka na dane z GET /api/observation)';
+        tr.appendChild(historyTd);
 
-        const contentEl = document.createElement('textarea');
-        contentEl.placeholder = 'Treść obserwacji';
-        contentEl.rows = 2;
-        contentEl.style.cssText = 'width:100%;margin-bottom:6px;padding:4px;box-sizing:border-box;';
-        wrap.appendChild(contentEl);
+        const contentTd = document.createElement('td');
+        contentTd.style.cssText = 'padding:4px;border:1px solid #ddd;vertical-align:top;';
+        const { div: obsField, editableSpan } = createObservationField();
+        contentTd.appendChild(obsField);
+        tr.appendChild(contentTd);
 
+        const conclusionsTd = document.createElement('td');
+        conclusionsTd.style.cssText = 'padding:4px;border:1px solid #ddd;vertical-align:top;';
         const conclusionsEl = document.createElement('textarea');
         conclusionsEl.placeholder = 'Wnioski';
         conclusionsEl.rows = 2;
-        conclusionsEl.style.cssText = 'width:100%;margin-bottom:6px;padding:4px;box-sizing:border-box;';
-        wrap.appendChild(conclusionsEl);
+        conclusionsEl.style.cssText = 'width:100%;box-sizing:border-box;font-size:13px;';
+        conclusionsTd.appendChild(conclusionsEl);
+        tr.appendChild(conclusionsTd);
 
+        const actionTd = document.createElement('td');
+        actionTd.style.cssText = 'padding:4px;border:1px solid #ddd;vertical-align:top;';
         const btn = document.createElement('button');
-        btn.textContent = 'Zapisz obserwację';
+        btn.textContent = 'Zapisz';
         btn.type = 'button';
-        btn.style.cssText = 'padding:6px 14px;cursor:pointer;';
-        wrap.appendChild(btn);
-
-        statusEl = document.createElement('div');
-        statusEl.style.cssText = 'margin-top:6px;';
-        wrap.appendChild(statusEl);
+        btn.style.cssText = 'padding:4px 10px;cursor:pointer;';
+        const statusEl = document.createElement('div');
+        statusEl.style.cssText = 'margin-top:4px;font-size:12px;';
+        actionTd.appendChild(btn);
+        actionTd.appendChild(statusEl);
+        tr.appendChild(actionTd);
 
         btn.addEventListener('click', () => {
-            const beneficiaryId = Number(selectEl.value);
-            if (!beneficiaryId) {
-                statusEl.textContent = 'Wybierz mieszkańca.';
-                statusEl.style.color = 'red';
-                return;
-            }
             if (!capturedToken) {
-                statusEl.textContent = 'Brak przechwyconego tokenu - wykonaj dowolną akcję w aplikacji i spróbuj ponownie.';
+                statusEl.textContent = 'Brak tokenu - wykonaj akcję w aplikacji.';
                 statusEl.style.color = 'red';
                 return;
             }
             if (!currentEmployeeId) {
-                statusEl.textContent = 'Trwa pobieranie danych pracownika, spróbuj za chwilę.';
+                statusEl.textContent = 'Czekam na dane pracownika...';
                 statusEl.style.color = 'red';
                 ensureEmployeeId();
                 return;
             }
+
+            const observationContent = ALERT_PREFIX + editableSpan.textContent.trim();
 
             const payload = {
                 id: 0,
@@ -181,7 +186,7 @@
                 beneficiaryId: beneficiaryId,
                 employeeId: currentEmployeeId,
                 observationConclusions: conclusionsEl.value,
-                observationContent: contentEl.value,
+                observationContent: observationContent,
                 observationTime: new Date().toISOString()
             };
 
@@ -204,11 +209,11 @@
                 .then(() => {
                     statusEl.textContent = '✔ Zapisano.';
                     statusEl.style.color = 'green';
-                    contentEl.value = '';
+                    editableSpan.textContent = '';
                     conclusionsEl.value = '';
                 })
                 .catch((e) => {
-                    statusEl.textContent = '✗ Błąd zapisu: ' + e.message + ' (sprawdź konsolę - możliwa blokada CORS)';
+                    statusEl.textContent = '✗ Błąd: ' + e.message + ' (sprawdź konsolę - możliwa blokada CORS)';
                     statusEl.style.color = 'red';
                     console.error('[Obserwacje] błąd zapisu:', e);
                 })
@@ -217,7 +222,53 @@
                 });
         });
 
-        refreshSelectOptions();
+        rowRefs[beneficiaryId] = { nameTd, historyTd };
+        return tr;
+    }
+
+    function refreshTableRows() {
+        if (!tableBodyEl) return;
+        tableBodyEl.innerHTML = '';
+        currentResidentEntries.forEach((entry) => {
+            (entry.beneficiaryIds || []).forEach((id) => {
+                if (rowRefs[id]) {
+                    rowRefs[id].nameTd.textContent = residentNames[id] || ('ID ' + id);
+                    tableBodyEl.appendChild(rowRefs[id].nameTd.closest('tr'));
+                } else {
+                    tableBodyEl.appendChild(buildRow(id, entry.guardianshipReasonId));
+                }
+            });
+        });
+    }
+
+    function buildTable() {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'margin:10px 0;padding:10px;border:1px solid #ccc;border-radius:6px;background:#fafafa;';
+
+        const title = document.createElement('div');
+        title.textContent = '📝 Obserwacje monitorowanych mieszkańców (Tampermonkey)';
+        title.style.cssText = 'font-weight:bold;margin-bottom:6px;font-size:13px;';
+        wrap.appendChild(title);
+
+        const table = document.createElement('table');
+        table.style.cssText = 'width:100%;border-collapse:collapse;font-size:13px;';
+
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['Mieszkaniec', 'Ostatnie obserwacje', 'Nowa obserwacja', 'Wnioski', ''].forEach((h) => {
+            const th = document.createElement('th');
+            th.textContent = h;
+            th.style.cssText = 'padding:4px;border:1px solid #ddd;background:#eee;text-align:left;';
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        tableBodyEl = document.createElement('tbody');
+        table.appendChild(tableBodyEl);
+        wrap.appendChild(table);
+
+        refreshTableRows();
         return wrap;
     }
 
@@ -229,7 +280,7 @@
             if (el.children.length === 0 && el.textContent && el.textContent.trim() === 'Mieszkańcy wymagający monitorowania') {
                 const section = el.closest('div');
                 if (!section || section.dataset.obsPanelInjected) continue;
-                const panel = buildPanel();
+                const panel = buildTable();
                 panel.id = 'obs-skrot-panel';
                 section.dataset.obsPanelInjected = '1';
                 section.parentElement
