@@ -8,19 +8,25 @@ plik Excel z dwoma arkuszami:
 
   "ObecnyStan" — czytelny słownik referencyjny: co dany mieszkaniec już ma
                  (usługi, zadania, harmonogramy z godzinami), pogrupowane po
-                 nazwisku, z pokojem jako pomocniczą kolumną do odróżnienia
-                 dwóch osób o tym samym imieniu i nazwisku.
+                 nazwisku, z prawdziwym numerem pokoju jako pomocniczą kolumną
+                 do odróżnienia dwóch osób o tym samym imieniu i nazwisku.
   "Import"     — pusta matryca do wypełnienia (ten sam układ co
                  matryca_import_harmonogramow.xlsx) — kopiuj z arkusza
                  "ObecnyStan" właściwe ID, wklejaj do "Import" żeby dodać
                  nowe usługi/zadania/harmonogramy odpowiedniej osobie.
 
-Pokój mieszkańca — best-effort, dwa źródła po kolei (patrz find_room_best_effort).
+Mieszkaniec i pokój — POTWIERDZONE zapytaniem z przechwytu w przeglądarce:
+  GET :5020/api/beneficiary/by-organization-id/paged?...&statusList=1
+  zwraca wprost {firstName, surname, roomNumber, roomName, storeyName, ...}
+  dla każdego aktywnego mieszkańca. Pobierane RAZ na starcie, potem łączone
+  z planami po plan["visitorId"] == beneficiary["id"] (zgodność sprawdzana
+  empirycznie w tym przebiegu — patrz podsumowanie na końcu w konsoli:
+  ile planów dopasowano do rejestru mieszkańców).
+  Uwaga: część rekordów ma puste firstName/surname w samym systemie
+  (potwierdzone w przechwycie) — to nie błąd skryptu.
 
 DIAGNOSTYKA: przy pierwszych 2 planach zapisuje surowy JSON (plan + pierwsza
-usługa + pierwsze zadanie) do debug_pierwszy_rekord.json — to pozwala
-sprawdzić PRAWDZIWE nazwy pól zamiast zgadywać (poprzednia wersja zgadła
-źle nazwiska mieszkańca i TaskKindId — wyszły puste na produkcji).
+usługa + pierwsze zadanie) do debug_pierwszy_rekord.json.
 
 Tylko odczyt (same GET) — bezpieczne do uruchamiania bez ograniczeń.
 
@@ -54,11 +60,6 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, CONFIG_NAME)
 DEBUG_JSON_PATH = os.path.join(SCRIPT_DIR, "debug_pierwszy_rekord.json")
 TIMEOUT = 20
 
-ROOM_FIELD_CANDIDATES = ("roomId", "room_id", "roomName", "executionRoomId",
-                          "residenceRoomId", "currentRoomId")
-NAME_CANDIDATES = (("visitorSurname", "visitorFirstName"),
-                    ("beneficiarySurname", "beneficiaryFirstName"),
-                    ("surname", "firstName"))
 TASK_KIND_ID_CANDIDATES = ("taskKindId", "taskDefinitionKindId", "kindId")
 
 logger = logging.getLogger("wyciagnij_aktywne_plany")
@@ -218,14 +219,38 @@ def fetch_triggers(client, task_def_id):
     return d if isinstance(d, list) else []
 
 
-def extract_name(plan):
-    for surname_key, firstname_key in NAME_CANDIDATES:
-        surname = (plan.get(surname_key) or "").strip()
-        firstname = (plan.get(firstname_key) or "").strip()
-        combined = f"{surname} {firstname}".strip()
-        if combined:
-            return combined, f"{surname_key}/{firstname_key}"
-    return f"(brak nazwiska, visitorId={plan.get('visitorId')})", None
+def fetch_beneficiary_roster(client, org_id):
+    """GET :5020/api/beneficiary/by-organization-id/paged?...&statusList=1 —
+    potwierdzone przechwytem w przeglądarce: zwraca wprost firstName, surname,
+    roomNumber, roomName, storeyName dla każdego aktywnego mieszkańca.
+    Zwraca dict {beneficiaryId: {surname, firstname, room, storey}}."""
+    roster, page = {}, 1
+    while True:
+        d, e = client._get(client.cfg["beneficiary_url"], "/api/beneficiary/by-organization-id/paged",
+                            {"page": page, "pageSize": 200, "orderBy": "pesel",
+                             "ascending": "false", "statusList": "1"})
+        if e:
+            logger.error(f"Błąd pobierania rejestru mieszkańców str.{page}: {e}")
+            break
+        items = d.get("results", []) if isinstance(d, dict) else []
+        for b in items:
+            surname = (b.get("surname") or "").strip()
+            firstname = (b.get("firstName") or "").strip()
+            name = f"{surname} {firstname}".strip() or f"(brak nazwiska, id={b.get('id')})"
+            roster[b["id"]] = {
+                "name": name,
+                "room": b.get("roomNumber") or "",
+                "roomName": b.get("roomName") or "",
+                "storey": b.get("storeyName") or "",
+            }
+        total_pages = d.get("totalNumberOfPages") if isinstance(d, dict) else None
+        if total_pages is not None:
+            if page >= total_pages:
+                break
+        elif len(items) < 200:
+            break
+        page += 1
+    return roster
 
 
 def extract_task_kind_id(task):
@@ -234,45 +259,6 @@ def extract_task_kind_id(task):
         if v not in (None, ""):
             return v, key
     return "", None
-
-
-_room_cache = {}
-_room_fallback_warned = False
-
-
-def find_room_best_effort(client, plan):
-    """Zwraca (pokoj_string, zrodlo) albo (None, None). Best-effort, patrz
-    docstring modułu."""
-    global _room_fallback_warned
-    for key in ROOM_FIELD_CANDIDATES:
-        v = plan.get(key)
-        if v not in (None, ""):
-            return str(v), f"plan.{key}"
-
-    visitor_id = plan.get("visitorId")
-    if visitor_id is None:
-        return None, None
-    if visitor_id in _room_cache:
-        return _room_cache[visitor_id]
-
-    d, e = client._get(client.cfg["beneficiary_url"],
-                        f"/api/beneficiary-residence/by-beneficiary-id/{visitor_id}")
-    if e or not d:
-        if not _room_fallback_warned:
-            logger.warning("beneficiary-residence/by-beneficiary-id z visitorId nie zwraca danych — "
-                            "prawdopodobnie visitorId != beneficiaryId. Kolumna Pokoj zostanie pusta.")
-            _room_fallback_warned = True
-        _room_cache[visitor_id] = (None, None)
-        return None, None
-
-    rec = d[0] if isinstance(d, list) and d else d if isinstance(d, dict) else {}
-    for key, val in rec.items():
-        if "room" in key.lower() and val not in (None, ""):
-            result = (str(val), f"beneficiary-residence.{key}")
-            _room_cache[visitor_id] = result
-            return result
-    _room_cache[visitor_id] = (None, None)
-    return None, None
 
 
 def build_import_sheet(wb):
@@ -321,20 +307,32 @@ def main():
 
     delay = cfg.get("delay_between_requests", 0.15)
 
+    print("Pobieranie rejestru mieszkańców (nazwisko, pokój)...")
+    roster = fetch_beneficiary_roster(client, org_id)
+    print(f"Rejestr: {len(roster)} aktywnych mieszkańców.")
+
     print("Pobieranie aktywnych planów...")
     plans = fetch_active_plans(client, org_id)
     print(f"Znaleziono {len(plans)} aktywnych planów.")
 
     debug_records = []
     rows = []
-    name_source_seen = set()
     taskkind_source_seen = set()
+    matched, unmatched = 0, 0
 
     for i, plan in enumerate(plans, 1):
         plan_id = plan.get("id")
-        resident, name_src = extract_name(plan)
-        name_source_seen.add(name_src)
-        room, room_src = find_room_best_effort(client, plan)
+        visitor_id = plan.get("visitorId")
+        person = roster.get(visitor_id)
+        if person:
+            matched += 1
+            resident, room = person["name"], person["room"]
+        else:
+            unmatched += 1
+            surname = (plan.get("visitorSurname") or "").strip()
+            firstname = (plan.get("visitorFirstName") or "").strip()
+            resident = f"{surname} {firstname}".strip() or f"(brak dopasowania, visitorId={visitor_id})"
+            room = ""
         print(f"  [{i}/{len(plans)}] Plan {plan_id} — {resident}")
 
         services = fetch_services(client, plan_id)
@@ -377,9 +375,10 @@ def main():
 
     with open(DEBUG_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(debug_records, f, ensure_ascii=False, indent=2, default=str)
-    print(f"Zrzut surowego JSON (do diagnostyki pól): {DEBUG_JSON_PATH}")
-    print(f"Źródła nazwiska użyte w tym przebiegu: {name_source_seen}")
+    print(f"Zrzut surowego JSON (do diagnostyki pól TaskKindId): {DEBUG_JSON_PATH}")
     print(f"Źródła TaskKindId użyte w tym przebiegu: {taskkind_source_seen}")
+    print(f"Dopasowanie planów do rejestru mieszkańców: {matched} dopasowanych, {unmatched} niedopasowanych"
+          + (" (visitorId != id z rejestru dla części planów)" if unmatched else ""))
 
     rows.sort(key=lambda r: (r["Mieszkaniec"].lower(), r["PlanId"] or 0,
                               r["ServiceKindId"] if isinstance(r["ServiceKindId"], int) else 0,
@@ -407,9 +406,6 @@ def main():
     out_path = os.path.join(SCRIPT_DIR, out_name)
     wb.save(out_path)
     print(f"\nZapisano {len(rows)} wierszy do: {out_path}")
-    if _room_fallback_warned:
-        print("UWAGA: kolumna 'Pokoj' jest pusta dla części/wszystkich wierszy — "
-              "zobacz log, prawdopodobnie visitorId != beneficiaryId (niepotwierdzone założenie).")
 
 
 if __name__ == "__main__":
