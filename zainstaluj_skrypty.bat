@@ -21,6 +21,7 @@ REM hardcook69/Syrena-Tempermokey.
 
 start "" "https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/Wyzwalacz.user.js"
 start "" "https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js"
+start "" "https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ZadaniaAdHocSkrot.user.js"
 
 echo.
 echo ============================================================
