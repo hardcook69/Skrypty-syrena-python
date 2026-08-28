@@ -409,6 +409,39 @@ def find_value_id_by_grupa_zawodowa(values, wanted_content, grupa_zawodowa_text,
     return matched.get("id"), note
 
 
+# Znane niedopasowania z Excela, które regularnie się powtarzają w różnych
+# plikach i mają jednoznaczne, wcześniej rozstrzygnięte z użytkownikiem
+# dopasowanie do grupy zawodowej -- działa NIEZALEŻNIE od tego, czy w danym
+# pliku jest (jeszcze) kolumna "Grupa zawodowa". Rozstrzygnięte 2026-08-28:
+# "Instruktor terapii zajęciowej" -> grupa terapii zajęciowej (nie istnieje
+# jako osobne stanowisko w słowniku).
+STANOWISKO_ALIASES = {
+    "INSTRUKTOR TERAPII ZAJĘCIOWEJ": "terapia_zajeciowa",
+}
+
+
+def find_value_id_by_alias(values, wanted_content, field_label):
+    """Dopasowanie dla 'Stanowisko' przez znane, wcześniej rozstrzygnięte
+    niedopasowania z Excela (patrz STANOWISKO_ALIASES) -- próbowane PRZED
+    find_value_id_by_grupa_zawodowa, bo nie zależy od obecności kolumny
+    'Grupa zawodowa' w pliku. Zawsze z notatką do przejrzenia. Zwraca (id,
+    notatka) albo (None, None), jeśli treść nie jest znanym aliasem albo w
+    słowniku brakuje choćby jednego stanowiska z tej grupy."""
+    group_key = STANOWISKO_ALIASES.get(wanted_content.strip().upper())
+    if group_key is None:
+        return None, None
+    members = STANOWISKO_GROUPS[group_key]
+    by_upper = {(v.get("content") or "").strip().upper(): v for v in values
+                if (v.get("content") or "").strip().upper() in members}
+    if not by_upper:
+        return None, None
+    close = difflib.get_close_matches(wanted_content.strip().upper(), list(by_upper.keys()), n=1, cutoff=0)
+    matched = by_upper[close[0]] if close else next(iter(by_upper.values()))
+    note = (f"pole '{field_label}': '{wanted_content.strip()}' nie znaleziono w słowniku -- "
+           f"znane niedopasowanie, dopasowano do '{matched.get('content')}'.")
+    return matched.get("id"), note
+
+
 _DURATION_RANGE_RE = re.compile(r"\d+(?:[.,]\d+)?\s*-\s*\d+(?:[.,]\d+)?\s*(minut|min\.?\b|godzin|h\b)")
 _DURATION_VALUE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(minut\w*|min\.?\b|godzin\w*|h\b)")
 
@@ -472,8 +505,10 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
             for n in names:
                 vid, err, note = find_value_id_by_content(dict_values(), n, elem.get("name"))
                 if err:
-                    vid2, note2 = find_value_id_by_grupa_zawodowa(
-                        dict_values(), n, row.get("grupa_zawodowa"), elem.get("name"))
+                    vid2, note2 = find_value_id_by_alias(dict_values(), n, elem.get("name"))
+                    if vid2 is None:
+                        vid2, note2 = find_value_id_by_grupa_zawodowa(
+                            dict_values(), n, row.get("grupa_zawodowa"), elem.get("name"))
                     if vid2 is None:
                         return None, err, notes
                     vid, note = vid2, note2
