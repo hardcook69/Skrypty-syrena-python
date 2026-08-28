@@ -246,7 +246,7 @@ def fetch_active_plans(client, org_id):
             logger.error(f"Błąd pobierania planów str.{page}: {e}")
             break
         items = d.get("results", []) if isinstance(d, dict) else []
-        all_plans.extend(items)
+        all_plans.extend(p for p in items if not p.get("isDeleted"))
         total_pages = d.get("totalNumberOfPages") if isinstance(d, dict) else None
         if total_pages is not None:
             if page >= total_pages:
@@ -262,7 +262,8 @@ def fetch_services(client, plan_id):
     if e:
         logger.warning(f"Usługi planu {plan_id}: {e}")
         return []
-    return d if isinstance(d, list) else []
+    items = d if isinstance(d, list) else []
+    return [s for s in items if not s.get("isDeleted")]
 
 
 def fetch_tasks(client, service_id):
@@ -270,7 +271,8 @@ def fetch_tasks(client, service_id):
     if e:
         logger.warning(f"Zadania usługi {service_id}: {e}")
         return []
-    return d if isinstance(d, list) else []
+    items = d if isinstance(d, list) else []
+    return [t for t in items if not t.get("isDeleted")]
 
 
 def fetch_triggers(client, task_def_id):
@@ -278,7 +280,8 @@ def fetch_triggers(client, task_def_id):
     if e:
         logger.warning(f"Wyzwalacze zadania {task_def_id}: {e}")
         return []
-    return d if isinstance(d, list) else []
+    items = d if isinstance(d, list) else []
+    return [tr for tr in items if not tr.get("isDeleted")]
 
 
 def fetch_beneficiary_roster(client, org_id):
