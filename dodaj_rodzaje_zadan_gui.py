@@ -1068,7 +1068,10 @@ class App(ttkb.Window):
                       f"przybliżonych, {len(errors)} błędów", "inf")
 
         total = len(resident_to_create) + len(employee_to_create)
-        self._btn_send.config(state="normal" if total and not errors else "disabled")
+        # Błędne wiersze i tak są pomijane pojedynczo w _do_send (patrz log
+        # "✗ ... — <błąd>"), więc kilka błędnych wierszy (np. nierozpoznany
+        # czas trwania) nie powinno blokować wysyłki reszty poprawnych zadań.
+        self._btn_send.config(state="normal" if total else "disabled")
 
     # ── WYSYŁKA ───────────────────────────────────────────────────────────────
     def _do_send(self):
