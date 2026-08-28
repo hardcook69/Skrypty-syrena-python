@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obserwacje – szybkie dodawanie z raportu dziennego
 // @namespace    https://apedps01.bzmw.gov.pl/
-// @version      1.6
+// @version      1.7
 // @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/ObserwacjeSkrot.user.js
 // @description  Dodawanie obserwacji mieszkańcom bezpośrednio z okna "Edycja raportu: Dzienny" - zapisuje się na serwerze (POST /api/observation), widoczne dla każdego kto ma zainstalowany ten sam skrypt.
@@ -104,10 +104,14 @@
     }
 
     // ---------- 3a. Panel DODAWANIA (przywrócony stary układ: lista + pole + wnioski + przycisk) ----------
+    // Pole "Nowa obserwacja" to zwykłe <textarea> z prefiksem wpisanym jako
+    // prawdziwy, edytowalny tekst (bez wizualnego wyszarzenia) - wcześniejsza
+    // wersja z niemodyfikowalnym fragmentem wewnątrz contentEditable=true diva
+    // całkowicie blokowała pisanie w Firefoksie (Chrome to obsługiwał
+    // poprawnie, ale to zbyt kruchy trik na wielu przeglądarkach).
     const ALERT_PREFIX = 'Alert(raport dzień/noc): ';
     let selectEl = null;
     let addStatusEl = null;
-    let addEditableSpan = null;
 
     function refreshSelectOptions() {
         if (!selectEl) return;
@@ -124,24 +128,6 @@
         if (prevValue) selectEl.value = prevValue;
     }
 
-    function createObservationField() {
-        const div = document.createElement('div');
-        div.contentEditable = 'true';
-        div.style.cssText = 'min-height:40px;border:1px solid #ccc;padding:4px;background:#fff;font-size:13px;box-sizing:border-box;margin-bottom:6px;word-break:break-word;overflow-wrap:anywhere;';
-
-        const prefixSpan = document.createElement('span');
-        prefixSpan.textContent = ALERT_PREFIX;
-        prefixSpan.style.color = '#999';
-        prefixSpan.contentEditable = 'false';
-        div.appendChild(prefixSpan);
-
-        const editableSpan = document.createElement('span');
-        editableSpan.style.color = '#000';
-        div.appendChild(editableSpan);
-
-        return { div, editableSpan };
-    }
-
     function buildAddPanel() {
         const wrap = document.createElement('div');
         wrap.style.cssText = 'margin:10px 0;padding:10px;border:1px solid #ccc;border-radius:6px;background:#fafafa;font-size:13px;';
@@ -155,9 +141,11 @@
         selectEl.style.cssText = 'width:100%;margin-bottom:6px;padding:4px;';
         wrap.appendChild(selectEl);
 
-        const { div: obsField, editableSpan } = createObservationField();
-        addEditableSpan = editableSpan;
-        wrap.appendChild(obsField);
+        const contentEl = document.createElement('textarea');
+        contentEl.value = ALERT_PREFIX;
+        contentEl.rows = 3;
+        contentEl.style.cssText = 'width:100%;margin-bottom:6px;padding:4px;box-sizing:border-box;';
+        wrap.appendChild(contentEl);
 
         const conclusionsEl = document.createElement('textarea');
         conclusionsEl.placeholder = 'Wnioski';
@@ -201,7 +189,7 @@
                 beneficiaryId: beneficiaryId,
                 employeeId: currentEmployeeId,
                 observationConclusions: conclusionsEl.value,
-                observationContent: ALERT_PREFIX + editableSpan.textContent.trim(),
+                observationContent: contentEl.value.trim(),
                 observationTime: new Date().toISOString()
             };
 
@@ -228,7 +216,7 @@
                 .then(() => {
                     addStatusEl.textContent = '✔ Zapisano.';
                     addStatusEl.style.color = 'green';
-                    editableSpan.textContent = '';
+                    contentEl.value = ALERT_PREFIX;
                     conclusionsEl.value = '';
                     fetchAlertHistory();
                 })
