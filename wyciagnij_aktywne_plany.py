@@ -6,12 +6,14 @@ razem z ich usługami, zadaniami i ISTNIEJĄCYMI WYZWALACZAMI (godziny/dni,
 tak jak w zakładce "3 Harmonogramy" w harmonogramy_gui.py), i zapisuje jeden
 plik Excel z dwoma arkuszami:
 
-  jeden arkusz NA KAŻDE PIĘTRO (np. "V piętro") — siatka:
-      Mieszkaniec | Nazwa zadania | Pon | Wt | Śr | Czw | Pt | Sob | Ndz | Miesięczne
-      Godziny w formacie zakresu np. "13:00-13:30" (koniec liczony z czasu trwania
-      zadania). Harmonogramy nie-tygodniowe (N-ty dzień miesiąca, konkretna data,
-      co N dni) trafiają do osobnej kolumny "Miesięczne", bo nie pasują do siatki
-      dni tygodnia.
+  jeden arkusz NA KAŻDE PIĘTRO (np. "V piętro"), w układzie Głównej Matrycy:
+      jeden WIERSZ = jeden mieszkaniec (Mieszkaniec, Pokój), jedna KOLUMNA =
+      jedna kombinacja (nazwa zadania, wzorzec dnia) - np. "Toalety
+      indywidualne (poniedziałek)" i "(wtorek)" to dwie różne kolumny, bo mają
+      inne godziny. W komórce: zakres godzin np. "13:00-13:30" (koniec liczony
+      z czasu trwania zadania). Kolumny posortowane malejąco wg częstotliwości
+      (codzienne na początku, miesięczne/rzadsze na końcu), w obrębie tej samej
+      częstotliwości chronologicznie wg godziny w ciągu dnia.
   "Import"    — pusta matryca do wypełnienia (ten sam układ co
                 matryca_import_harmonogramow.xlsx) — żeby dodać nowe
                 usługi/zadania/harmonogramy odpowiedniej osobie.
@@ -65,8 +67,6 @@ TASK_KIND_ID_CANDIDATES = ("taskKindId", "taskDefinitionKindId", "kindId")
 
 logger = logging.getLogger("wyciagnij_aktywne_plany")
 
-DOW_GRID = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Ndz"]
-DOW_CRON_TO_GRID = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6}
 DOW_EN_TO_PL_FULL = {"MON": "poniedziałek", "TUE": "wtorek", "WED": "środa", "THU": "czwartek",
                       "FRI": "piątek", "SAT": "sobota", "SUN": "niedziela"}
 MON_EN_TO_PL = {"JAN": "Sty", "FEB": "Luty", "MAR": "Marz", "APR": "Kwi", "MAY": "Maj", "JUN": "Cze",
@@ -84,43 +84,59 @@ def _time_range(hr, mn, duration_minutes):
     return f"{start_total // 60:02d}:{start_total % 60:02d}-{end_total // 60:02d}:{end_total % 60:02d}"
 
 
-def classify_trigger(cron, duration_minutes):
-    """Rozkłada CRON (wygenerowany przez TriggerBuilder w harmonogramy_gui.py) na
-    dni tygodnia z zakresem godzin, ALBO tekst dla osobnej kolumny "Miesięczne"
-    (N-ty dzień miesiąca / N-ty dzień tyg. mies. / konkretna data / co N dni) -
-    te tryby nie są "co tydzień w X", więc nie pasują do siatki dni tygodnia.
-    Zwraca (indeksy_dni: list[int] 0=Pon..6=Ndz, tekst_godzin, tekst_miesięczny|None)."""
+def trigger_columns(task_name, cron, duration_minutes):
+    """Rozbija JEDEN wyzwalacz na listę kolumn siatki: (col_key, col_label,
+    freq_score, sort_minutes, wartość_komórki).
+
+    Kolumna = unikalna kombinacja (nazwa zadania, wzorzec dnia) - np. "Toalety
+    indywidualne (poniedziałek)" i "(wtorek)" to DWIE różne kolumny, bo mają
+    różne godziny u różnych mieszkańców (tak jak w ręcznie prowadzonej Głównej
+    Matrycy). freq_score = przybliżona liczba wystąpień/miesiąc, do sortowania
+    malejąco (najczęstsze pierwsze, miesięczne/rzadsze na końcu) - patrz main()."""
     p = (cron or "").split()
     if len(p) < 6:
-        return [], "", None
+        return []
     _, mn, hr, dom, mon, dow = p[:6]
     tr = _time_range(hr, mn, duration_minutes)
+    try:
+        sort_minutes = int(hr) * 60 + int(mn)
+    except (ValueError, TypeError):
+        sort_minutes = 0
+
+    def day_col(day_label, freq_score, suffix=""):
+        key = f"{task_name}|{day_label}"
+        label = f"{task_name} ({day_label}{suffix})" if day_label else task_name
+        return (key, label, freq_score, sort_minutes, tr)
+
+    def monthly_col(freq_score, text):
+        return (f"{task_name}|miesięczne", f"{task_name} (miesięczne)", freq_score, 999999, text)
 
     if dow not in ("*", "?"):
         if "#" in dow:
             parts = dow.split(",")
             if len(parts) > 1:
-                # co dwa tygodnie - nadal konkretny dzień tygodnia, tylko nie co tydzień
                 d = parts[0].split("#")[0]
-                idx = DOW_CRON_TO_GRID.get(d)
-                return ([idx] if idx is not None else []), f"{tr} (co 2 tyg.)", None
+                return [day_col(DOW_EN_TO_PL_FULL.get(d, d), 2.17, ", co 2 tyg.")]
             d, n = dow.split("#")
-            return [], "", f"{n}. {DOW_EN_TO_PL_FULL.get(d, d)} mies.  {tr}"
+            return [monthly_col(1, f"{n}. {DOW_EN_TO_PL_FULL.get(d, d)} mies.  {tr}")]
         if "," in dow:
-            idxs = [DOW_CRON_TO_GRID[d] for d in dow.split(",") if d in DOW_CRON_TO_GRID]
-            return idxs, tr, None
-        idx = DOW_CRON_TO_GRID.get(dow)
-        return ([idx] if idx is not None else []), tr, None
+            days = [d for d in dow.split(",") if d in DOW_EN_TO_PL_FULL]
+            return [day_col(DOW_EN_TO_PL_FULL.get(d, d), len(days) * 4.33) for d in days]
+        return [day_col(DOW_EN_TO_PL_FULL.get(dow, dow), 4.33)]
 
     if dom not in ("?", "*"):
         if "/" in dom:
             s, n = dom.split("/")
-            return [], "", f"co {n} dni od {s}.  {tr}"
+            try:
+                freq = 30 / int(n) if int(n) else 1
+            except ValueError:
+                freq = 1
+            return [monthly_col(freq, f"co {n} dni od {s}.  {tr}")]
         if mon not in ("*", "?"):
-            return [], "", f"{dom} {MON_EN_TO_PL.get(mon, mon)}  {tr}"
-        return [], "", f"{dom}. dzień mies.  {tr}"
+            return [monthly_col(0.1, f"{dom} {MON_EN_TO_PL.get(mon, mon)}  {tr}")]
+        return [monthly_col(1, f"{dom}. dzień mies.  {tr}")]
 
-    return list(range(7)), tr, None
+    return [day_col("", 30)]
 
 
 def load_cfg():
@@ -334,24 +350,36 @@ def _safe_sheet_name(name, used):
     return candidate
 
 
-def build_storey_sheets(wb, storey_rows):
-    """Jeden arkusz na piętro: Mieszkaniec | Nazwa zadania | Pon..Ndz | Miesięczne -
-    tak jak w Szablon_zada_.xlsx, podzielone na moduły/piętra jak w Głównej Matrycy."""
-    headers = ["Mieszkaniec", "Nazwa zadania"] + DOW_GRID + ["Miesięczne"]
-    widths = [22, 30] + [16] * 7 + [26]
+def build_storey_sheets(wb, storey_columns, storey_residents):
+    """Jeden arkusz na piętro, w układzie Głównej Matrycy: jeden wiersz = jeden
+    mieszkaniec, jedna kolumna = jedna kombinacja (zadanie, dzień). Kolumny
+    posortowane malejąco wg częstotliwości (najczęstsze - np. codzienne - na
+    początku, miesięczne/rzadsze na końcu), w obrębie tej samej częstotliwości
+    chronologicznie wg godziny w ciągu dnia."""
     used_names = set()
-    for storey in sorted(storey_rows.keys(), key=lambda s: s.lower()):
-        rows = sorted(storey_rows[storey], key=lambda r: (r["Mieszkaniec"].lower(), r["NazwaZadania"].lower()))
+    for storey in sorted(storey_columns.keys(), key=lambda s: s.lower()):
+        cols = storey_columns[storey]
+        col_keys = sorted(cols.keys(), key=lambda k: (-cols[k]["freq_score"], cols[k]["sort_minutes"]))
+        headers = ["Mieszkaniec", "Pokoj"] + [cols[k]["label"] for k in col_keys]
+
         ws = wb.create_sheet(_safe_sheet_name(storey, used_names))
         ws.append(headers)
         for cell in ws[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="1B5E20")
-        for r in rows:
-            ws.append([r["Mieszkaniec"], r["NazwaZadania"]] + [r["days"][i] for i in range(7)] + [r["Miesieczne"]])
-        for i, w in enumerate(widths, start=1):
-            ws.column_dimensions[get_column_letter(i)].width = w
-        ws.freeze_panes = "A2"
+            cell.alignment = Alignment(wrap_text=True, vertical="center")
+        ws.row_dimensions[1].height = 30
+
+        residents = sorted(storey_residents[storey].keys(), key=lambda rk: rk[0].lower())
+        for resident, room in residents:
+            cells = storey_residents[storey][(resident, room)]
+            ws.append([resident, room] + ["; ".join(cells.get(k, [])) for k in col_keys])
+
+        ws.column_dimensions["A"].width = 22
+        ws.column_dimensions["B"].width = 8
+        for i in range(len(col_keys)):
+            ws.column_dimensions[get_column_letter(i + 3)].width = 16
+        ws.freeze_panes = "C2"
 
 
 def main():
@@ -385,7 +413,8 @@ def main():
     print(f"Znaleziono {len(plans)} aktywnych planów.")
 
     debug_records = []
-    storey_rows = {}
+    storey_columns = {}    # storey -> {col_key: {"label":..., "freq_score":..., "sort_minutes":...}}
+    storey_residents = {}  # storey -> {(resident, room): {col_key: [wartości]}}
     taskkind_source_seen = set()
     matched, unmatched = 0, 0
     total_tasks = 0
@@ -396,13 +425,13 @@ def main():
         person = roster.get(visitor_id)
         if person:
             matched += 1
-            resident, storey = person["name"], person["storey"] or "(nieznane piętro)"
+            resident, room, storey = person["name"], person["room"], person["storey"] or "(nieznane piętro)"
         else:
             unmatched += 1
             surname = (plan.get("visitorSurname") or "").strip()
             firstname = (plan.get("visitorFirstName") or "").strip()
             resident = f"{surname} {firstname}".strip() or f"(brak dopasowania, visitorId={visitor_id})"
-            storey = "(nieznane piętro)"
+            room, storey = "", "(nieznane piętro)"
         print(f"  [{i}/{len(plans)}] Plan {plan_id} — {resident}")
 
         services = fetch_services(client, plan_id)
@@ -419,26 +448,20 @@ def main():
                 tkid, tk_src = extract_task_kind_id(t)
                 taskkind_source_seen.add(tk_src)
                 duration = t.get("normativeTime")
-
-                days = {d: [] for d in range(7)}
-                monthly = []
-                for tr in triggers:
-                    idxs, day_time, monthly_text = classify_trigger(tr.get("cron", ""), duration)
-                    for idx in idxs:
-                        if day_time:
-                            days[idx].append(day_time)
-                    if monthly_text:
-                        monthly.append(monthly_text)
+                task_name = t.get("taskKindName", "") or svc.get("serviceKindName", "")
                 if not triggers:
-                    monthly = ["(brak harmonogramu)"]
+                    continue  # brak harmonogramu = nic do pokazania w tej siatce godzin
 
                 total_tasks += 1
-                storey_rows.setdefault(storey, []).append({
-                    "Mieszkaniec": resident,
-                    "NazwaZadania": t.get("taskKindName", "") or svc.get("serviceKindName", ""),
-                    "days": {d: "; ".join(v) for d, v in days.items()},
-                    "Miesieczne": "; ".join(monthly),
-                })
+                cols = storey_columns.setdefault(storey, {})
+                cells = storey_residents.setdefault(storey, {}).setdefault((resident, room), {})
+                for tr in triggers:
+                    for key, label, freq_score, sort_minutes, value in trigger_columns(
+                            task_name, tr.get("cron", ""), duration):
+                        existing = cols.get(key)
+                        if existing is None or freq_score > existing["freq_score"]:
+                            cols[key] = {"label": label, "freq_score": freq_score, "sort_minutes": sort_minutes}
+                        cells.setdefault(key, []).append(value)
 
     with open(DEBUG_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(debug_records, f, ensure_ascii=False, indent=2, default=str)
@@ -449,13 +472,13 @@ def main():
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    build_storey_sheets(wb, storey_rows)
+    build_storey_sheets(wb, storey_columns, storey_residents)
     build_import_sheet(wb)
 
     out_name = f"aktywne_plany_slownik_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
     out_path = os.path.join(SCRIPT_DIR, out_name)
     wb.save(out_path)
-    print(f"\nZapisano {total_tasks} zadań w {len(storey_rows)} arkuszach (piętrach) do: {out_path}")
+    print(f"\nZapisano {total_tasks} zaplanowanych zadań w {len(storey_columns)} arkuszach (piętrach) do: {out_path}")
 
 
 if __name__ == "__main__":
