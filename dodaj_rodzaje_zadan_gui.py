@@ -357,6 +357,58 @@ def expand_stanowisko_ids(values, matched_id):
     return ids or [matched_id]
 
 
+# Etykiety kolumny "Grupa zawodowa" z Excela (kolumna opcjonalna, obok
+# "Stanowisko") -- osobna, grubsza taksonomia niż STANOWISKO_GROUPS, ale
+# mapowalna na te same klucze grup. Używana jako DRUGA linia dopasowania
+# dla pola 'Stanowisko': gdy dosłowna/przybliżona treść ze Stanowiska nie
+# pasuje do ŻADNEJ wartości w słowniku, szukamy najlepszego dopasowania
+# WŚRÓD stanowisk należących do wskazanej tu grupy zawodowej zamiast od
+# razu zgłaszać błąd -- ustalone z użytkownikiem 2026-08-28 ("stanowiska na
+# pewno są w systemie, znajdź najlepsze odpowiednie"). Zawsze z notatką do
+# przejrzenia (NIGDY po cichu).
+EXCEL_GRUPA_ZAWODOWA_TO_STANOWISKO_GROUPS = {
+    "PERSONEL OPIEKUŃCZY": ["opiekun"],
+    "PERSONEL OPIEKUŃCZO-MEDYCZNY": ["pielegniarka"],
+    "PERSONEL PIELĘGNIARSKI": ["pielegniarka"],
+    "PERSONEL SPRZĄTAJĄCY": ["pokojowa"],
+    "PERSONEL SOCJALNY": ["praca_socjalna"],
+    "PERSONEL TERAPEUTYCZNY": ["rehabilitacja_ruchowa", "kulturalno_oswiatowe", "terapia_zajeciowa", "psychologiczno_terapeutyczne"],
+}
+
+
+def find_value_id_by_grupa_zawodowa(values, wanted_content, grupa_zawodowa_text, field_label):
+    """Druga linia dopasowania dla pola 'Stanowisko', wywoływana TYLKO gdy
+    find_value_id_by_content nie znalazła nic (ani dokładnie, ani
+    przybliżenie). Z kolumny 'Grupa zawodowa' w Excelu bierze wszystkie
+    wymienione tam etykiety, mapuje na grupy z STANOWISKO_GROUPS i szuka
+    NAJLEPSZEGO dopasowania treści ze Stanowiska wśród stanowisk z tych
+    grup -- bez progu odcięcia (użytkownik: "na pewno są w systemie", więc
+    zawsze wybieramy najbliższe), ale ZAWSZE z notatką do przejrzenia.
+    Zwraca (id, notatka) albo (None, None), jeśli kolumna pusta/etykieta
+    nierozpoznana albo brak kandydatów w słowniku."""
+    if not grupa_zawodowa_text:
+        return None, None
+    labels = [x.strip().upper() for x in grupa_zawodowa_text.split(",") if x.strip()]
+    candidate_positions = set()
+    for label in labels:
+        for group_key in EXCEL_GRUPA_ZAWODOWA_TO_STANOWISKO_GROUPS.get(label, []):
+            candidate_positions |= STANOWISKO_GROUPS[group_key]
+    if not candidate_positions:
+        return None, None
+    by_upper = {(v.get("content") or "").strip().upper(): v for v in values
+                if (v.get("content") or "").strip().upper() in candidate_positions}
+    if not by_upper:
+        return None, None
+    close = difflib.get_close_matches(wanted_content.strip().upper(), list(by_upper.keys()), n=1, cutoff=0)
+    if not close:
+        return None, None
+    matched = by_upper[close[0]]
+    note = (f"pole '{field_label}': '{wanted_content.strip()}' nie znaleziono w słowniku -- "
+           f"dopasowano po grupie zawodowej z Excela ('{grupa_zawodowa_text}') do "
+           f"'{matched.get('content')}' -- SPRAWDŹ, czy to na pewno o to stanowisko chodziło.")
+    return matched.get("id"), note
+
+
 _DURATION_RANGE_RE = re.compile(r"\d+(?:[.,]\d+)?\s*-\s*\d+(?:[.,]\d+)?\s*(minut|min\.?\b|godzin|h\b)")
 _DURATION_VALUE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(minut\w*|min\.?\b|godzin\w*|h\b)")
 
@@ -419,7 +471,12 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
             ids, seen_ids = [], set()
             for n in names:
                 vid, err, note = find_value_id_by_content(dict_values(), n, elem.get("name"))
-                if err: return None, err, notes
+                if err:
+                    vid2, note2 = find_value_id_by_grupa_zawodowa(
+                        dict_values(), n, row.get("grupa_zawodowa"), elem.get("name"))
+                    if vid2 is None:
+                        return None, err, notes
+                    vid, note = vid2, note2
                 if note: notes.append(note)
                 for expanded_id in expand_stanowisko_ids(dict_values(), vid):
                     if expanded_id not in seen_ids:
@@ -610,6 +667,10 @@ def read_tasks_from_excel(xlsx_path, sheet_name):
         if col is None:
             return None, f"Nie znaleziono kolumny '{label}' w wierszu nagłówka arkusza '{ws.title}'."
         cols[key] = col
+    # Opcjonalna kolumna -- używana tylko jako drugorzędne źródło dopasowania
+    # dla pola 'Stanowisko' (patrz find_value_id_by_grupa_zawodowa), starsze
+    # pliki Excela mogą jej nie mieć.
+    grupa_zawodowa_col = find_header_column(ws, 1, lambda h: h.strip() == "Grupa zawodowa")
 
     rows = []
     seen_pracownik = set()
@@ -638,6 +699,8 @@ def read_tasks_from_excel(xlsx_path, sheet_name):
             "usluga_mieszkaniec": get("usluga_mieszkaniec") if zadanie_mieszkaniec else None,
             "czas_realizacji": get("czas_realizacji"),
             "stanowisko": get("stanowisko"),
+            "grupa_zawodowa": (str(_cell_value(ws, merge_map, r, grupa_zawodowa_col)).strip()
+                               if grupa_zawodowa_col and _cell_value(ws, merge_map, r, grupa_zawodowa_col) else None),
             "ilosc_pracownikow": get("ilosc_pracownikow"),
             "priorytet": get("priorytet"),
             "kanal": get("kanal"),
