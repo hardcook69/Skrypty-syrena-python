@@ -225,6 +225,86 @@ def find_value_id_by_content(values, wanted_content, field_label):
     return None, f"Nie znaleziono wartości '{wanted_content}' dla pola '{field_label}'. Dostępne opcje: {available}", None
 
 
+# ── Grupy zawodowe stanowisk ────────────────────────────────────────────────
+# Jedno zadanie może wykonywać wiele stanowisk, ale tylko z tej samej grupy:
+# gdy Excel wskazuje jedno konkretne stanowisko (np. "Opiekun"), zadanie ma
+# być wykonywalne przez WSZYSTKIE stanowiska z tej samej grupy zawodowej
+# (np. też "Starszy opiekun" i "Młodszy opiekun"), nie tylko przez dokładnie
+# wpisane. Grupy pochodzą ze słownika 2 (Stanowisko), pole "Grupa zawodowa"
+# (eksport Stanowisko_1.xlsx), z trzema ręcznymi poprawkami ustalonymi z
+# użytkownikiem 2026-08-28: "opiekun" NIE obejmuje opiekuna medycznego
+# (osobna grupa), opiekun medyczny jest połączony z pielęgniarkami, a
+# pokojowa/starsza pokojowa zostają bez zmian (tak jak już były w słowniku).
+# Ratownik medyczny / starszy ratownik medyczny nie zostały przypisane do
+# żadnej z tych trzech grup w rozmowie z użytkownikiem, więc tworzą własną,
+# osobną parę zamiast trafiać do grupy "opiekun". Stanowiska spoza tej mapy
+# (np. kadry, księgowość, kierownictwo) dopasowują się tylko dokładnie do
+# siebie -- patrz expand_stanowisko_ids().
+STANOWISKO_GROUPS = {
+    "opiekun": {"OPIEKUN", "STARSZY OPIEKUN", "MŁODSZY OPIEKUN"},
+    "pielegniarka": {"PIELĘGNIARKA", "STARSZA PIELĘGNIARKA", "OPIEKUN MEDYCZNY", "STARSZY OPIEKUN MEDYCZNY"},
+    "pokojowa": {"POKOJOWA", "STARSZA POKOJOWA"},
+    "ratownik_medyczny": {"RATOWNIK MEDYCZNY", "STARSZY RATOWNIK MEDYCZNY"},
+    "administracja_jednostka": {"STARSZY INSPEKTOR DS.  ADMINISTRACYJNYCH", "INSPEKTOR DS. ADMINISTRACYJNYCH", "PODINSPEKTOR DS. ADMINISTRACYJNYCH"},
+    "administracja_syrena": {"TECHNIK", "STARSZY TECHNIK"},
+    "bezpieczenstwo_it": {"INFORMATYK", "STARSZY INFORMATYK"},
+    "bhp": {"SPECJALISTA DS. BEZPIECZEŃSTWA I HIGIENY PRACY", "INSPEKTOR DS. BEZPIECZEŃSTWA I HIGIENY PRACY", "STARSZY INSPEKTOR DS.  BEZPIECZEŃSTWA I HIGIENY PRACY"},
+    "dietetyk": {"STARSZY DIETETYK", "DIETETYK"},
+    "finanse_ksiegowosc": {"STARSZY INSPEKTOR DS. FINANSOWO-KSIĘGOWYCH", "INSPEKTOR DS. FINANSOWO-KSIĘGOWYCH", "PODINSPEKTOR DS. FINANSOWO-KSIĘGOWYCH"},
+    "gospodarcze_obsluga": {"STARSZY RECEPCJONISTA", "RECEPCJONISTA", "KIEROWNIK DZIAŁU ADMINISTRACYJNO-GOSPODARCZEGO"},
+    "kadry": {"INSPEKTOR DS. KADR", "PODINSPEKTOR DS. KADR", "STARSZY INSPEKTOR DS. KADR"},
+    "kancelaria": {"INSPEKTOR DS. KANCELARYJNYCH", "SEKRETARKA", "PODINSPEKTOR DS. KANCELARYJNYCH", "STARSZY INSPEKTOR DS.  KANCELARYJNYCH"},
+    "kuchnia_kierowanie": {"SZEF KUCHNI"},
+    "kierowanie_zespolem": {"KIEROWNIK ZESPOŁU PIELĘGNIAREK", "KIEROWNIK ZESPOŁU"},
+    "krawiectwo": {"KRAWIEC", "SZWACZKA"},
+    "kulturalno_oswiatowe": {"INSTRUKTOR DS. KULTURALNO-OŚWIATOWYCH", "STARSZY INSTRUKTOR DS. KULTURALNO-OŚWIATOWYCH"},
+    "magazyn": {"MAGAZYNIER", "STARSZY MAGAZYNIER"},
+    "ochrona_zdrowia": {"STARSZY LEKARZ"},
+    "ppoz": {"STARSZY INSPEKTOR PPOŻ.", "INSPEKTOR DS. PPOŻ", "STARSZY INSPEKTOR DS. PPOŻ."},
+    "pomoc_kuchenna": {"POMOC KUCHENNA"},
+    "praca_socjalna": {"PRACOWNIK SOCJALNY", "STARSZY PRACOWNIK SOCJALNY", "SPECJALISTA PRACY SOCJALNEJ", "STARSZY SPECJALISTA PRACY SOCJALNEJ"},
+    "pralnia": {"PRACZKA"},
+    "prawne": {"RADCA PRAWNY"},
+    "rehabilitacja_ruchowa": {"FIZJOTERAPEUTA", "TECHNIK FIZJOTERAPII", "STARSZY TECHNIK FIZJOTERAPII", "STARSZY FIZJOTERAPEUTA", "TECHNIK MASAŻYSTA", "STARSZY TECHNIK MASAŻYSTA"},
+    "religijne": {"KAPELAN"},
+    "rzemieslnicze": {"KONSERWATOR", "ROBOTNIK GOSPODARCZY", "STARSZY KONSERWATOR"},
+    "terapia_zajeciowa": {"STARSZY TERAPEUTA ZAJĘCIOWY", "TERAPEUTA ZAJĘCIOWY"},
+    "psychologiczno_terapeutyczne": {"PSYCHOLOG", "STARSZY TERAPEUTA", "TERAPEUTA"},
+    "zamowienia_publiczne": {"INSPEKTOR DS. ZAMÓWIEŃ PUBLICZNYCH", "PODINSPEKTOR DS.ZAMÓWIEŃ PUBLICZNYCH", "STARSZY INSPEKTOR DS. ZAMÓWIEŃ PUBLICZNYCH"},
+    "transport": {"KIEROWCA SAMOCHODU OSOBOWEGO"},
+    "zywienie": {"STARSZY KUCHARZ", "KUCHARZ"},
+    "kierowanie_wtz": {"KIEROWNIK WARSZTATU TERAPII ZAJĘCIOWEJ"},
+    "kierowanie_dzialem": {"GŁÓWNY KSIĘGOWY", "KIEROWNIK DZIAŁU OPIEKUŃCZO-TERAPETYCZNEGO", "KIEROWNIK DZIAŁU MEDYCZNO-TERAPEUTYCZNEGO", "ZASTĘPCA KIEROWNIKA DZIAŁU OPIEKUŃCZO-TERAPEUTYCZNEGO"},
+    "kierowanie_warsztatem": {"KIEROWNIK WARSZTATU"},
+    "opiekun_kwalifikowany": {"LEKARZ", "STARSZY OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ", "OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ"},
+    "dyrektor": {"DYREKTOR"},
+    "zastepca_dyrektora": {"ZASTĘPCA DYREKTORA"},
+}
+
+STANOWISKO_GROUP_BY_POSITION = {pos: key for key, members in STANOWISKO_GROUPS.items() for pos in members}
+
+
+def expand_stanowisko_ids(values, matched_id):
+    """Rozszerza jedno dopasowane stanowisko na wszystkie stanowiska z tej
+    samej grupy zawodowej (patrz STANOWISKO_GROUPS) -- zwraca listę id bez
+    duplikatów. Stanowiska spoza mapy zwracają tylko swoje własne id (bez
+    rozszerzania)."""
+    matched = next((v for v in values if v.get("id") == matched_id), None)
+    if matched is None:
+        return [matched_id]
+    content = (matched.get("content") or "").strip().upper()
+    group_key = STANOWISKO_GROUP_BY_POSITION.get(content)
+    if group_key is None:
+        return [matched_id]
+    members = STANOWISKO_GROUPS[group_key]
+    ids, seen = [], set()
+    for v in values:
+        if (v.get("content") or "").strip().upper() in members and v.get("id") not in seen:
+            seen.add(v.get("id"))
+            ids.append(v.get("id"))
+    return ids or [matched_id]
+
+
 def parse_duration_minutes(text):
     """'30 minut' -> 30, '1 godzina' -> 60, '2 godziny' -> 120. Zwraca None,
     jeśli tekstu nie da się rozpoznać (nie zgadujemy)."""
@@ -271,12 +351,15 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
             names = [x.strip() for x in (row["stanowisko"] or "").split(",") if x.strip()]
             if not names:
                 return None, "Brak wartości w polu 'Stanowisko'.", notes
-            ids = []
+            ids, seen_ids = [], set()
             for n in names:
                 vid, err, note = find_value_id_by_content(dict_values(), n, elem.get("name"))
                 if err: return None, err, notes
                 if note: notes.append(note)
-                ids.append(vid)
+                for expanded_id in expand_stanowisko_ids(dict_values(), vid):
+                    if expanded_id not in seen_ids:
+                        seen_ids.add(expanded_id)
+                        ids.append(expanded_id)
             value = ids
 
         elif name == "ilość pracowników":
