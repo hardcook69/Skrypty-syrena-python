@@ -73,15 +73,25 @@ MON_EN_TO_PL = {"JAN": "Sty", "FEB": "Luty", "MAR": "Marz", "APR": "Kwi", "MAY":
                 "JUL": "Lip", "AUG": "Sie", "SEP": "Wrz", "OCT": "Paź", "NOV": "Lis", "DEC": "Gru"}
 
 
-def _time_range(hr, mn, duration_minutes):
-    """np. 13:00-13:30 - koniec liczony z czasu trwania zadania (normativeTime)."""
+def _parse_times(hr, mn, duration_minutes):
+    """Zwraca (lista_zakresów_HH:MM-HH:MM, minuty_pierwszego_wystąpienia_od_północy).
+
+    Pole godziny (i/lub minuty) w CRON może być listą oddzielaną przecinkami -
+    POTWIERDZONE w natywnym UI SYRENA: wyzwalacz "3 razy dziennie" pokazuje się
+    tam jako "O 07:25, 16:25 i 19:25" - czyli godzina="7,16,19", minuta="25"
+    (iloczyn kartezjański obu list daje wszystkie pary godzina:minuta)."""
     try:
-        start_total = int(hr) * 60 + int(mn)
+        hours = [int(h) for h in str(hr).split(",")]
+        minutes = [int(m) for m in str(mn).split(",")]
     except (ValueError, TypeError):
-        return ""
+        return [], 0
     duration = duration_minutes if isinstance(duration_minutes, (int, float)) else 0
-    end_total = (start_total + int(duration)) % (24 * 60)
-    return f"{start_total // 60:02d}:{start_total % 60:02d}-{end_total // 60:02d}:{end_total % 60:02d}"
+    starts = sorted(h * 60 + m for h in hours for m in minutes)
+    ranges = []
+    for start_total in starts:
+        end_total = (start_total + int(duration)) % (24 * 60)
+        ranges.append(f"{start_total // 60:02d}:{start_total % 60:02d}-{end_total // 60:02d}:{end_total % 60:02d}")
+    return ranges, (starts[0] if starts else 0)
 
 
 def trigger_columns(task_name, cron, duration_minutes):
@@ -92,24 +102,23 @@ def trigger_columns(task_name, cron, duration_minutes):
     indywidualne (poniedziałek)" i "(wtorek)" to DWIE różne kolumny, bo mają
     różne godziny u różnych mieszkańców (tak jak w ręcznie prowadzonej Głównej
     Matrycy). freq_score = przybliżona liczba wystąpień/miesiąc, do sortowania
-    malejąco (najczęstsze pierwsze, miesięczne/rzadsze na końcu) - patrz main()."""
+    malejąco (najczęstsze pierwsze, miesięczne/rzadsze na końcu) - patrz main().
+    Uwzględnia wyzwalacze z kilkoma porami dziennie (np. "3 razy dziennie")."""
     p = (cron or "").split()
     if len(p) < 6:
         return []
     _, mn, hr, dom, mon, dow = p[:6]
-    tr = _time_range(hr, mn, duration_minutes)
-    try:
-        sort_minutes = int(hr) * 60 + int(mn)
-    except (ValueError, TypeError):
-        sort_minutes = 0
+    time_ranges, sort_minutes = _parse_times(hr, mn, duration_minutes)
+    tr = "; ".join(time_ranges)
+    occurrences = max(1, len(time_ranges))
 
     def day_col(day_label, freq_score, suffix=""):
         key = f"{task_name}|{day_label}"
         label = f"{task_name} ({day_label}{suffix})" if day_label else task_name
-        return (key, label, freq_score, sort_minutes, tr)
+        return (key, label, freq_score * occurrences, sort_minutes, tr)
 
     def monthly_col(freq_score, text):
-        return (f"{task_name}|miesięczne", f"{task_name} (miesięczne)", freq_score, 999999, text)
+        return (f"{task_name}|miesięczne", f"{task_name} (miesięczne)", freq_score * occurrences, 999999, text)
 
     if dow not in ("*", "?"):
         if "#" in dow:
