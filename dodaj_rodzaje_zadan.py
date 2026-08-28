@@ -305,14 +305,30 @@ def expand_stanowisko_ids(values, matched_id):
     return ids or [matched_id]
 
 
+_DURATION_RANGE_RE = re.compile(r"\d+(?:[.,]\d+)?\s*-\s*\d+(?:[.,]\d+)?\s*(minut|min\.?\b|godzin|h\b)")
+_DURATION_VALUE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(minut\w*|min\.?\b|godzin\w*|h\b)")
+
+
 def parse_duration_minutes(text):
-    """'30 minut' -> 30, '1 godzina' -> 60, '2 godziny' -> 120. Zwraca None,
-    jeśli tekstu nie da się rozpoznać (nie zgadujemy)."""
-    m = re.match(r"\s*(\d+)?\s*(minut|godzin)", (text or "").strip().lower())
+    """'30 minut' -> 30, '1 godzina' -> 60, '2 godziny' -> 120, '30 min' -> 30,
+    '1 h' -> 60. Szuka liczby z jednostką GDZIEKOLWIEK w tekście (nie tylko na
+    początku wiersza) i rozpoznaje skróty 'min'/'h' -- w Excelu czas bywa
+    zapisany jako np. 'DOT B – gr IV – 50 minut' albo '30 min dla całej grupy
+    mieszkańców'. Jeśli w tekście jest ZAKRES (np. '1-1,5 h, 2x dziennie') nie
+    zgadujemy, który koniec zakresu wybrać, i zwracamy None -- tak samo jak
+    dla tekstu bez żadnej jawnej liczby+jednostki (np. 'W zależności od
+    potrzeb')."""
+    t = (text or "").strip().lower()
+    if not t:
+        return None
+    if _DURATION_RANGE_RE.search(t):
+        return None
+    m = _DURATION_VALUE_RE.search(t)
     if not m:
         return None
-    n = int(m.group(1)) if m.group(1) else 1
-    return n * 60 if m.group(2) == "godzin" else n
+    n = float(m.group(1).replace(",", "."))
+    is_hours = m.group(2).startswith("godzin") or m.group(2) == "h"
+    return int(round(n * 60 if is_hours else n))
 
 
 def resolve_task_value_attributes(client, structure_elements, row, side, dict_value_cache,
