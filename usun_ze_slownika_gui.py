@@ -259,6 +259,8 @@ class App(ttkb.Window):
         self._items = []
         self._item_rows = []
         self._checked_ids = set()
+        self._sort_col = "content"
+        self._sort_reverse = False
 
         self._build_ui()
 
@@ -369,8 +371,10 @@ class App(ttkb.Window):
         tf.pack(fill="both", expand=True)
         self._tree = ttkb.Treeview(tf, columns=("sel", "id", "content", "order"), show="headings",
                                    selectmode="none", height=14, bootstyle=ACCENT_STYLE)
-        self._tree.heading("sel", text="✓"); self._tree.heading("id", text="ID")
-        self._tree.heading("content", text="Treść"); self._tree.heading("order", text="Kolejność")
+        self._tree.heading("sel", text="✓")
+        self._tree.heading("id", text="ID", command=lambda: self._sort_by("id"))
+        self._tree.heading("content", text="Treść", command=lambda: self._sort_by("content"))
+        self._tree.heading("order", text="Kolejność", command=lambda: self._sort_by("order"))
         self._tree.column("sel", width=26, stretch=False, anchor="center")
         self._tree.column("id", width=70, stretch=False, anchor="center")
         self._tree.column("content", width=500, stretch=True)
@@ -477,7 +481,8 @@ class App(ttkb.Window):
     def _render_items(self, items):
         self._items = items
         self._checked_ids = set()
-        self._refresh_tree(items)
+        self._refresh_tree(self._filtered_sorted_items())
+        self._update_sort_headers()
 
     def _refresh_tree(self, items):
         for iid in self._tree.get_children():
@@ -488,10 +493,43 @@ class App(ttkb.Window):
             self._item_rows.append((iid, v))
         self._update_sel_label()
 
-    def _apply_filter(self):
+    def _filtered_sorted_items(self):
         q = self._e_filter.get().strip().lower()
-        filtered = [v for v in self._items if q in (v.get("content") or "").lower()] if q else self._items
-        self._refresh_tree(filtered)
+        items = [v for v in self._items if q in (v.get("content") or "").lower()] if q else list(self._items)
+
+        def key(v):
+            if self._sort_col == "id":
+                return v.get("id") or 0
+            if self._sort_col == "order":
+                return v.get("displayOrder") or 0
+            return (v.get("content") or "").lower()
+
+        items.sort(key=key, reverse=self._sort_reverse)
+        return items
+
+    def _apply_filter(self):
+        self._refresh_tree(self._filtered_sorted_items())
+
+    def _sort_by(self, col):
+        """Kliknięcie nagłówka kolumny -- sortuje po niej (np. 'Kolejność',
+        żeby zebrać razem ostatnio dodane pozycje po ich numerze sortowania
+        i łatwo zaznaczyć tylko je do usunięcia). Ponowne kliknięcie tej
+        samej kolumny odwraca kierunek."""
+        if self._sort_col == col:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_col = col
+            self._sort_reverse = False
+        self._refresh_tree(self._filtered_sorted_items())
+        self._update_sort_headers()
+
+    def _update_sort_headers(self):
+        labels = {"id": "ID", "content": "Treść", "order": "Kolejność"}
+        for col, label in labels.items():
+            arrow = ""
+            if self._sort_col == col:
+                arrow = " ▼" if self._sort_reverse else " ▲"
+            self._tree.heading(col, text=label + arrow)
 
     def _on_row_click(self, event):
         iid = self._tree.identify_row(event.y)
