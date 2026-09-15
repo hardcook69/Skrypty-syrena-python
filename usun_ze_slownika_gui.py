@@ -28,7 +28,7 @@ listą pozycji (nie tylko liczbą), i dodatkowego ostrzeżenia, gdy
 """
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import threading, requests, json, os, sys, traceback, logging
 
 try:
@@ -36,6 +36,12 @@ try:
     HAS_TTKB = True
 except ImportError:
     HAS_TTKB = False
+
+try:
+    import openpyxl
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
 
 
 # ── Konfiguracja ─────────────────────────────────────────────────────────────
@@ -249,6 +255,60 @@ def delete_dictionary_value(client, value_id):
     return True, None
 
 
+# ── Zaznaczanie z Excela ─────────────────────────────────────────────────────
+# Odtwarza dokładnie te teksty (kolumny "Zadanie pracownik" / "Zadanie
+# mieszkaniec"), które dodaj_rodzaje_zadan_gui.py wysyła jako 'content'
+# rodzaju zadania (słownik 53) -- żeby móc zaznaczyć w tym narzędziu to, co
+# dany plik Excela by utworzył, i to skasować.
+def _build_merge_map(ws):
+    m = {}
+    for rng in ws.merged_cells.ranges:
+        top_val = ws.cell(row=rng.min_row, column=rng.min_col).value
+        for row in range(rng.min_row, rng.max_row + 1):
+            for col in range(rng.min_col, rng.max_col + 1):
+                m[(row, col)] = top_val
+    return m
+
+
+def _cell_value(ws, merge_map, row, col):
+    v = ws.cell(row=row, column=col).value
+    if v is None:
+        v = merge_map.get((row, col))
+    return v
+
+
+def find_header_column_optional(ws, header_row, predicate):
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=header_row, column=col).value
+        if header and predicate(str(header)):
+            return col
+    return None
+
+
+def extract_task_names_from_excel(xlsx_path):
+    """Zbiera wszystkie wartości z kolumn 'Zadanie pracownik' i 'Zadanie
+    mieszkaniec' ze WSZYSTKICH arkuszy pliku -- pomija po cichu arkusze,
+    które nie mają żadnej z tych kolumn (np. inny typ pliku). Zwraca zbiór
+    tekstów znormalizowanych (strip + lower) do porównania z 'content' w
+    słowniku."""
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+    names = set()
+    for ws in wb.worksheets:
+        col_p = find_header_column_optional(ws, 1, lambda h: h.strip() == "Zadanie pracownik")
+        col_m = find_header_column_optional(ws, 1, lambda h: h.strip() == "Zadanie mieszkaniec")
+        if col_p is None and col_m is None:
+            continue
+        merge_map = _build_merge_map(ws)
+        for r in range(2, ws.max_row + 1):
+            for col in (col_p, col_m):
+                if col is None:
+                    continue
+                v = _cell_value(ws, merge_map, r, col)
+                if v is not None and str(v).strip():
+                    names.add(str(v).strip().lower())
+    return names
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 class App(ttkb.Window):
     def __init__(self):
@@ -390,6 +450,8 @@ class App(ttkb.Window):
         bot = ttkb.Frame(sec_items); bot.pack(fill="x", pady=(4, 0))
         ttkb.Button(bot, text="Wszystkie", command=self._sel_all, bootstyle="link").pack(side="left", padx=1)
         ttkb.Button(bot, text="Żadne", command=self._desel_all, bootstyle="link").pack(side="left", padx=1)
+        ttkb.Button(bot, text="📂 Zaznacz z Excela...", command=self._sel_from_excel,
+                    bootstyle="secondary", padding=(8, 3)).pack(side="left", padx=(10, 1))
         self._lbl_sel = ttkb.Label(bot, text="0 zaznaczonych", font=FONT_TINY, bootstyle="secondary")
         self._lbl_sel.pack(side="right")
 
@@ -562,6 +624,56 @@ class App(ttkb.Window):
         n = len(self._checked_ids)
         self._lbl_sel.config(text=f"{n} zaznaczonych")
         self._btn_delete.config(state="normal" if n else "disabled")
+
+    def _sel_from_excel(self):
+        """Wczytuje plik Excela w formacie dodaj_rodzaje_zadan_gui.py
+        (kolumny 'Zadanie pracownik' / 'Zadanie mieszkaniec') i zaznacza w
+        aktualnie wczytanym słowniku te pozycje, których treść dokładnie
+        odpowiada nazwom z tego pliku -- żeby móc skasować tylko to, co ten
+        konkretny Excel by utworzył."""
+        if not HAS_OPENPYXL:
+            messagebox.showerror("Zaznacz z Excela",
+                "Ta funkcja wymaga pakietu 'openpyxl'.\nZainstaluj go poleceniem:\n\n    pip install openpyxl")
+            return
+        if not self._item_rows:
+            messagebox.showwarning("Zaznacz z Excela", "Najpierw wczytaj pozycje słownika."); return
+        path = filedialog.askopenfilename(
+            title="Wybierz plik Excel", filetypes=[("Excel", "*.xlsx *.xlsm"), ("Wszystkie pliki", "*.*")])
+        if not path:
+            return
+        self._log_msg(f"Wczytywanie nazw zadań z: {path}", "inf")
+
+        def _t():
+            try:
+                names = extract_task_names_from_excel(path)
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Zaznacz z Excela", f"Nie udało się odczytać pliku:\n{e}"))
+                self.after(0, lambda: self._log_msg(f"Błąd odczytu {path}: {e}", "err"))
+                return
+            self.after(0, lambda: self._apply_excel_selection(names, path))
+        self._bg(_t)
+
+    def _apply_excel_selection(self, names, path):
+        if not names:
+            messagebox.showwarning("Zaznacz z Excela",
+                "Nie znaleziono w tym pliku kolumny 'Zadanie pracownik' ani 'Zadanie mieszkaniec' "
+                "(albo są puste) -- to nie jest plik w formacie dodaj_rodzaje_zadan_gui.py?")
+            return
+        matched = 0
+        for iid, v in self._item_rows:
+            content = (v.get("content") or "").strip().lower()
+            if content in names:
+                matched += 1
+                self._checked_ids.add(iid)
+                vals = list(self._tree.item(iid, "values")); vals[0] = "☑"
+                self._tree.item(iid, values=vals, tags=("checked",))
+        self._update_sel_label()
+        unmatched = len(names) - matched
+        self._log_msg(
+            f"Excel {os.path.basename(path)}: {len(names)} nazw zadań, zaznaczono {matched} pasujących "
+            f"pozycji w aktualnie wczytanym słowniku"
+            + (f" ({unmatched} nazw z Excela nie znaleziono w tym słowniku — może są w innym słowniku "
+               f"albo już usunięte)" if unmatched > 0 else ""), "ok")
 
     def _get_selected_items(self):
         iid_map = {iid: v for iid, v in self._item_rows}
