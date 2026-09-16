@@ -689,7 +689,16 @@ class App(ttkb.Window):
         selected = self._get_selected_items()
         if not selected:
             messagebox.showwarning("Usuwanie", "Nie zaznaczono żadnej pozycji."); return
-        listing = "\n".join(f"  [{v.get('id')}] {v.get('content','')}" for v in selected)
+        # Przy dużym zaznaczeniu (np. "Zaznacz z Excela" na kilkuset pozycjach)
+        # wypisanie WSZYSTKICH w jednym messageboxie robi z niego nieczytelne/
+        # zbyt duże okno -- przyciski [tak]/[nie] mogą wypadać poza ekran, co
+        # wygląda jak "przycisk nic nie robi". Ograniczamy podgląd, licznik
+        # zawsze pokazuje pełną liczbę.
+        PREVIEW_LIMIT = 30
+        preview = selected[:PREVIEW_LIMIT]
+        listing = "\n".join(f"  [{v.get('id')}] {v.get('content','')}" for v in preview)
+        if len(selected) > PREVIEW_LIMIT:
+            listing += f"\n  ... i jeszcze {len(selected) - PREVIEW_LIMIT} innych"
         warn_prefix = "⚠ PRODUKCJA — usunięcie jest natychmiastowe.\n\n" if IS_PROD else ""
         if not messagebox.askyesno("Potwierdzenie usunięcia",
             f"{warn_prefix}Usunąć {len(selected)} pozycji ze słownika?\n"
