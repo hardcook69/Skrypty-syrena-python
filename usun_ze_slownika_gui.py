@@ -318,7 +318,7 @@ class App(ttkb.Window):
         self.client = Client()
         self._items = []
         self._item_rows = []
-        self._checked_ids = set()
+        self._checked_value_ids = set()   # ID pozycji słownika (stabilne -- PRZETRWA sortowanie/filtrowanie)
         self._sort_col = "content"
         self._sort_reverse = False
 
@@ -542,7 +542,7 @@ class App(ttkb.Window):
 
     def _render_items(self, items):
         self._items = items
-        self._checked_ids = set()
+        self._checked_value_ids = set()
         self._refresh_tree(self._filtered_sorted_items())
         self._update_sort_headers()
 
@@ -551,7 +551,10 @@ class App(ttkb.Window):
             self._tree.delete(iid)
         self._item_rows = []
         for v in items:
-            iid = self._tree.insert("", "end", values=("☐", v.get("id", ""), v.get("content", ""), v.get("displayOrder", "")))
+            checked = v.get("id") in self._checked_value_ids
+            iid = self._tree.insert("", "end", values=("☑" if checked else "☐", v.get("id", ""),
+                                                        v.get("content", ""), v.get("displayOrder", "")),
+                                    tags=("checked",) if checked else ())
             self._item_rows.append((iid, v))
         self._update_sel_label()
 
@@ -597,31 +600,35 @@ class App(ttkb.Window):
         iid = self._tree.identify_row(event.y)
         if not iid or self._tree.identify_region(event.x, event.y) != "cell":
             return
+        v = next((v for row_iid, v in self._item_rows if row_iid == iid), None)
+        if v is None:
+            return
+        vid = v.get("id")
         vals = list(self._tree.item(iid, "values"))
-        if iid in self._checked_ids:
-            self._checked_ids.discard(iid); vals[0] = "☐"
+        if vid in self._checked_value_ids:
+            self._checked_value_ids.discard(vid); vals[0] = "☐"
             self._tree.item(iid, values=vals, tags=())
         else:
-            self._checked_ids.add(iid); vals[0] = "☑"
+            self._checked_value_ids.add(vid); vals[0] = "☑"
             self._tree.item(iid, values=vals, tags=("checked",))
         self._update_sel_label()
 
     def _sel_all(self):
-        for iid, _ in self._item_rows:
-            self._checked_ids.add(iid)
+        for iid, v in self._item_rows:
+            self._checked_value_ids.add(v.get("id"))
             vals = list(self._tree.item(iid, "values")); vals[0] = "☑"
             self._tree.item(iid, values=vals, tags=("checked",))
         self._update_sel_label()
 
     def _desel_all(self):
-        for iid, _ in self._item_rows:
-            self._checked_ids.discard(iid)
+        for iid, v in self._item_rows:
+            self._checked_value_ids.discard(v.get("id"))
             vals = list(self._tree.item(iid, "values")); vals[0] = "☐"
             self._tree.item(iid, values=vals, tags=())
         self._update_sel_label()
 
     def _update_sel_label(self):
-        n = len(self._checked_ids)
+        n = len(self._checked_value_ids)
         self._lbl_sel.config(text=f"{n} zaznaczonych")
         self._btn_delete.config(state="normal" if n else "disabled")
 
@@ -660,14 +667,12 @@ class App(ttkb.Window):
                 "(albo są puste) -- to nie jest plik w formacie dodaj_rodzaje_zadan_gui.py?")
             return
         matched = 0
-        for iid, v in self._item_rows:
+        for v in self._items:   # cały wczytany słownik, nie tylko aktualnie widoczny (filtr/sortowanie)
             content = (v.get("content") or "").strip().lower()
             if content in names:
                 matched += 1
-                self._checked_ids.add(iid)
-                vals = list(self._tree.item(iid, "values")); vals[0] = "☑"
-                self._tree.item(iid, values=vals, tags=("checked",))
-        self._update_sel_label()
+                self._checked_value_ids.add(v.get("id"))
+        self._refresh_tree(self._filtered_sorted_items())
         unmatched = len(names) - matched
         self._log_msg(
             f"Excel {os.path.basename(path)}: {len(names)} nazw zadań, zaznaczono {matched} pasujących "
@@ -676,8 +681,8 @@ class App(ttkb.Window):
                f"albo już usunięte)" if unmatched > 0 else ""), "ok")
 
     def _get_selected_items(self):
-        iid_map = {iid: v for iid, v in self._item_rows}
-        return [iid_map[iid] for iid in self._checked_ids if iid in iid_map]
+        by_id = {v.get("id"): v for v in self._items}
+        return [by_id[vid] for vid in self._checked_value_ids if vid in by_id]
 
     # ── USUWANIE ──────────────────────────────────────────────────────────────
     def _do_delete(self):
