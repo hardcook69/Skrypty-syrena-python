@@ -811,14 +811,14 @@ class _CheckboxList:
         self.label_fn = label_fn
         self.items = []
         self.all_rows = []
-        self.checked_ids = set()
+        self.checked_value_ids = set()   # ID rekordu (stabilne -- PRZETRWA filtrowanie/odświeżenie)
         self.tree.bind("<Button-1>", self._on_click)
         if filter_entry is not None:
             filter_entry.bind("<KeyRelease>", lambda _e: self.apply_filter())
 
     def set_items(self, items):
         self.items = sorted(items, key=lambda it: self.label_fn(it).lower())
-        self.checked_ids = set()
+        self.checked_value_ids = set()
         self.refresh(self.items)
 
     def refresh(self, items):
@@ -826,8 +826,9 @@ class _CheckboxList:
             self.tree.delete(iid)
         self.all_rows = []
         for it in items:
-            iid = self.tree.insert("", "end", values=("☐", it.get("id", ""), self.label_fn(it)),
-                                   tags=("unchecked",))
+            checked = it.get("id") in self.checked_value_ids
+            iid = self.tree.insert("", "end", values=("☑" if checked else "☐", it.get("id", ""), self.label_fn(it)),
+                                   tags=("checked",) if checked else ("unchecked",))
             self.all_rows.append((iid, it))
         self._update_label()
 
@@ -840,36 +841,40 @@ class _CheckboxList:
         iid = self.tree.identify_row(event.y)
         if not iid or self.tree.identify_region(event.x, event.y) != "cell":
             return
+        it = next((it for row_iid, it in self.all_rows if row_iid == iid), None)
+        if it is None:
+            return
+        vid = it.get("id")
         vals = list(self.tree.item(iid, "values"))
-        if iid in self.checked_ids:
-            self.checked_ids.discard(iid); vals[0] = "☐"
+        if vid in self.checked_value_ids:
+            self.checked_value_ids.discard(vid); vals[0] = "☐"
             self.tree.item(iid, values=vals, tags=("unchecked",))
         else:
-            self.checked_ids.add(iid); vals[0] = "☑"
+            self.checked_value_ids.add(vid); vals[0] = "☑"
             self.tree.item(iid, values=vals, tags=("checked",))
         self._update_label()
 
     def sel_all(self):
-        for iid, _ in self.all_rows:
-            self.checked_ids.add(iid)
+        for iid, it in self.all_rows:
+            self.checked_value_ids.add(it.get("id"))
             vals = list(self.tree.item(iid, "values")); vals[0] = "☑"
             self.tree.item(iid, values=vals, tags=("checked",))
         self._update_label()
 
     def desel_all(self):
-        for iid, _ in self.all_rows:
-            self.checked_ids.discard(iid)
+        for iid, it in self.all_rows:
+            self.checked_value_ids.discard(it.get("id"))
             vals = list(self.tree.item(iid, "values")); vals[0] = "☐"
             self.tree.item(iid, values=vals, tags=("unchecked",))
         self._update_label()
 
     def _update_label(self):
         if self.sel_label is not None:
-            self.sel_label.config(text=f"{len(self.checked_ids)} zaznaczonych")
+            self.sel_label.config(text=f"{len(self.checked_value_ids)} zaznaczonych")
 
     def selected(self):
-        iid_map = {iid: it for iid, it in self.all_rows}
-        return [iid_map[iid] for iid in self.checked_ids if iid in iid_map]
+        by_id = {it.get("id"): it for it in self.items}
+        return [by_id[vid] for vid in self.checked_value_ids if vid in by_id]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
