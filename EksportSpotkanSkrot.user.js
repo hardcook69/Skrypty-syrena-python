@@ -186,17 +186,31 @@
         });
     }
 
-    // ---------- Przycisk widoczny TYLKO na /meetings ----------
+    // ---------- Przycisk widoczny TYLKO na /meetings, wstawiony obok natywnych ----------
+    // Kontener z prawdziwymi przyciskami ("Generuj raport", "Dodaj spotkanie") --
+    // dokładna klasa potwierdzona ze strony "Rejestr spotkań" przez użytkownika.
+    // Wstawiamy się jako pierwsze dziecko (najbardziej na lewo w tym rzędzie),
+    // zamiast floatować nad interfejsem jak wcześniej (position:fixed zasłaniał
+    // "Generuj raport").
+    function findButtonContainer() {
+        return document.querySelector('.col-5.offset-7.btn-container')
+            || document.querySelector('.btn-container');
+    }
+
     function injectButton() {
-        if (document.getElementById(BUTTON_ID)) return;
-        document.body.appendChild(el('button', {
+        if (document.getElementById(BUTTON_ID)) return true;
+        const container = findButtonContainer();
+        if (!container) return false;
+        const btn = el('button', {
             id: BUTTON_ID,
             text: '📊 Eksport spotkań do Excela',
-            style: 'position:fixed; top:70px; right:16px; z-index:99999; padding:8px 14px; ' +
-                   'background:#2c5f8a; color:#fff; border:none; border-radius:6px; ' +
-                   'font:600 13px "Segoe UI",sans-serif; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.25);',
+            style: 'display:inline-flex; align-items:center; margin-right:8px; padding:6px 12px; ' +
+                   'background:#2c5f8a; color:#fff; border:none; border-radius:4px; ' +
+                   'font:600 13px "Segoe UI",sans-serif; cursor:pointer; vertical-align:middle;',
             onclick: runExport,
-        }));
+        });
+        container.insertBefore(btn, container.firstChild);
+        return true;
     }
 
     function removeButton() {
@@ -213,14 +227,15 @@
         else removeButton();
     }
 
-    // SPA (nawigacja bez przeładowania strony) -- pilnujemy zmian adresu, bo
-    // DOMContentLoaded/load odpalają się tylko raz przy pierwszym wejściu.
+    // SPA (nawigacja bez przeładowania strony, kontener przycisków renderuje
+    // się asynchronicznie) -- pilnujemy co 500ms zarówno zmiany adresu, jak i
+    // (re)pojawienia się kontenera, żeby doczekać się aż Angular go wyrenderuje.
     let lastPath = location.pathname;
     setInterval(() => {
         if (location.pathname !== lastPath) {
             lastPath = location.pathname;
-            syncButtonVisibility();
         }
+        syncButtonVisibility();
     }, 500);
 
     document.addEventListener('DOMContentLoaded', syncButtonVisibility);
