@@ -1,0 +1,228 @@
+// ==UserScript==
+// @name         Eksport spotkań do Excela
+// @namespace    https://apedps01.bzmw.gov.pl/
+// @version      1.0
+// @updateURL    https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/EksportSpotkanSkrot.user.js
+// @downloadURL  https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/EksportSpotkanSkrot.user.js
+// @description  Przycisk widoczny TYLKO na stronie /meetings, eksportujący listę spotkań (ze szczegółami i uczestnikami podzielonymi na pracownicy/mieszkańcy) do pliku .xlsx wprost z przeglądarki - odpowiednik eksport_spotkan_gui.py, ale bez osobnego logowania (używa tokena sesji, którą masz już otwartą).
+// @match        *://apedps01.bzmw.gov.pl/*
+// @match        *://ttapedps01.bzmw.gov.pl/*
+// @require      https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+// Ten sam mechanizm zbierania danych i te same, POTWIERDZONE przechwyconym
+// ruchem endpointy co w eksport_spotkan_gui.py -- patrz komentarz na górze
+// tamtego pliku po pełny opis i zastrzeżenia (mapowanie Wnioski<-summary
+// i Link do spotkania<-urlLink niepotwierdzone na wypełnionych danych,
+// uczestnicy dzieleni na Pracownicy/Mieszkańcy po przynależności ID do
+// odpowiedniego słownika /api/visitor, nie po znaczeniu pól
+// leaders/members/subjects/plannedSubjects).
+
+(function () {
+    'use strict';
+
+    const AUTH_PORT = 5010;
+    const EMPLOYEE_PORT = 5000;
+    const BENEFICIARY_PORT = 5020;
+    const ORG_ID = 1;
+    const BUTTON_ID = 'eksport-spotkan-btn';
+
+    // ---------- Podsłuch tokena Bearer (ten sam mechanizm co ZadaniaAdHocSkrot.user.js) ----------
+    let capturedToken = null;
+    const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+        if (typeof name === 'string' && name.toLowerCase() === 'authorization' && /^Bearer /.test(value)) {
+            capturedToken = value;
+        }
+        return origSetHeader.apply(this, arguments);
+    };
+
+    function apiBase(port) {
+        return 'http://' + location.hostname + ':' + port;
+    }
+
+    function authFetch(url) {
+        return fetch(url, { headers: { Authorization: capturedToken } }).then((r) => {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+            return r.json();
+        });
+    }
+
+    // ---------- Fetche danych ----------
+    function fetchMeetings() {
+        const all = [];
+        function page(p) {
+            const qs = new URLSearchParams({ page: p, pageSize: 200, organizationId: ORG_ID, orderBy: 'meetingTime', ascending: 'true' });
+            return authFetch(apiBase(BENEFICIARY_PORT) + '/api/meeting/by-organization-id/paged?' + qs).then((data) => {
+                const items = data.results || [];
+                all.push(...items);
+                const totalPages = data.totalNumberOfPages;
+                if (totalPages != null ? p < totalPages : items.length === 200) return page(p + 1);
+            });
+        }
+        return page(1).then(() => all);
+    }
+
+    function fetchMeetingDetail(id) {
+        return authFetch(apiBase(BENEFICIARY_PORT) + '/api/meeting/' + id).catch(() => ({}));
+    }
+
+    function fetchDictionaryByKind(kind) {
+        return authFetch(apiBase(EMPLOYEE_PORT) + '/api/dictionary-value/by-dictionary-kind/' + kind + '?withAttributes=true').catch(() => []);
+    }
+
+    function fetchVisitors(typeList) {
+        const qs = new URLSearchParams({ organizationId: ORG_ID, typeList });
+        return authFetch(apiBase(AUTH_PORT) + '/api/visitor/by-organization-id?' + qs).catch(() => []);
+    }
+
+    function visitorLabel(v) {
+        return (((v.surname || '') + ' ' + (v.firstName || '')).trim()) || ('#' + v.id);
+    }
+
+    // ---------- DOM helper ----------
+    function el(tag, attrs, ...children) {
+        const e = document.createElement(tag);
+        Object.entries(attrs || {}).forEach(([k, v]) => {
+            if (k === 'style') e.style.cssText = v;
+            else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2), v);
+            else if (k === 'text') e.textContent = v;
+            else e.setAttribute(k, v);
+        });
+        children.flat().forEach((c) => {
+            if (c === null || c === undefined) return;
+            e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+        });
+        return e;
+    }
+
+    function setButtonState(text, disabled) {
+        const btn = document.getElementById(BUTTON_ID);
+        if (!btn) return;
+        btn.textContent = text;
+        btn.disabled = !!disabled;
+        btn.style.opacity = disabled ? '0.6' : '1';
+        btn.style.cursor = disabled ? 'default' : 'pointer';
+    }
+
+    function downloadXlsx(rows) {
+        const cols = ['Data spotkania', 'Rodzaj spotkania', 'Miejsce', 'Temat', 'Cel', 'Wnioski',
+                      'Link do spotkania', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)'];
+        const aoa = [cols].concat(rows.map((r) => cols.map((c) => r[c] || '')));
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 18 }, { wch: 22 }, { wch: 20 }, { wch: 34 }, { wch: 26 },
+                       { wch: 34 }, { wch: 26 }, { wch: 34 }, { wch: 34 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Spotkania');
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+        XLSX.writeFile(wb, 'spotkania_' + stamp + '.xlsx');
+    }
+
+    function runExport() {
+        if (typeof XLSX === 'undefined') {
+            alert('Biblioteka do zapisu .xlsx nie wczytała się (brak dostępu do CDN?). Sprawdź połączenie i odśwież stronę.');
+            return;
+        }
+        if (!capturedToken) {
+            alert('Nie złapałem jeszcze tokena logowania — odśwież stronę, poczekaj aż się w pełni załaduje, i spróbuj ponownie.');
+            return;
+        }
+        setButtonState('Pobieranie listy...', true);
+        Promise.all([
+            fetchDictionaryByKind(72),
+            fetchDictionaryByKind(94),
+            fetchVisitors(4),
+            fetchVisitors(3),
+            fetchMeetings(),
+        ]).then(([placesArr, kindsArr, employees, residents, meetings]) => {
+            const places = Object.fromEntries(placesArr.map((v) => [v.id, v.content]));
+            const kinds = Object.fromEntries(kindsArr.map((v) => [v.id, v.content]));
+            const employeeIds = new Set(employees.map((v) => v.id));
+            const residentIds = new Set(residents.map((v) => v.id));
+            const nameById = Object.fromEntries(employees.concat(residents).map((v) => [v.id, visitorLabel(v)]));
+
+            const rows = [];
+            function next(i) {
+                if (i >= meetings.length) {
+                    downloadXlsx(rows);
+                    setButtonState('📊 Eksport spotkań do Excela', false);
+                    return;
+                }
+                const m = meetings[i];
+                setButtonState('Pobieranie ' + (i + 1) + '/' + meetings.length + '...', true);
+                fetchMeetingDetail(m.id).then((detail) => {
+                    const placeId = detail.placeId;
+                    const miejsce = places[placeId] || m.placeName || '';
+                    const kindId = detail.kindId != null ? detail.kindId : m.kindId;
+                    const rodzaj = kinds[kindId] || m.kindName || '';
+                    const participantIds = new Set();
+                    ['leaders', 'members', 'subjects', 'plannedSubjects'].forEach((f) => {
+                        (detail[f] || []).forEach((id) => participantIds.add(id));
+                    });
+                    const pracownicy = [...participantIds].filter((id) => employeeIds.has(id))
+                        .map((id) => nameById[id] || ('#' + id)).sort();
+                    const mieszkancy = [...participantIds].filter((id) => residentIds.has(id))
+                        .map((id) => nameById[id] || ('#' + id)).sort();
+                    rows.push({
+                        'Data spotkania': detail.meetingTime || m.meetingTime || '',
+                        'Rodzaj spotkania': rodzaj,
+                        'Miejsce': miejsce,
+                        'Temat': detail.topic || m.topic || '',
+                        'Cel': detail.purpose || m.purpose || '',
+                        'Wnioski': detail.summary || '',
+                        'Link do spotkania': detail.urlLink || detail.link || '',
+                        'Pracownicy (uczestnicy)': pracownicy.join(', '),
+                        'Mieszkańcy (uczestnicy)': mieszkancy.join(', '),
+                    });
+                    next(i + 1);
+                }).catch(() => next(i + 1));
+            }
+            next(0);
+        }).catch((e) => {
+            alert('Błąd eksportu: ' + e.message);
+            setButtonState('📊 Eksport spotkań do Excela', false);
+        });
+    }
+
+    // ---------- Przycisk widoczny TYLKO na /meetings ----------
+    function injectButton() {
+        if (document.getElementById(BUTTON_ID)) return;
+        document.body.appendChild(el('button', {
+            id: BUTTON_ID,
+            text: '📊 Eksport spotkań do Excela',
+            style: 'position:fixed; top:70px; right:16px; z-index:99999; padding:8px 14px; ' +
+                   'background:#2c5f8a; color:#fff; border:none; border-radius:6px; ' +
+                   'font:600 13px "Segoe UI",sans-serif; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.25);',
+            onclick: runExport,
+        }));
+    }
+
+    function removeButton() {
+        const btn = document.getElementById(BUTTON_ID);
+        if (btn) btn.remove();
+    }
+
+    function isMeetingsPage() {
+        return location.pathname.replace(/\/+$/, '').endsWith('/meetings');
+    }
+
+    function syncButtonVisibility() {
+        if (isMeetingsPage()) injectButton();
+        else removeButton();
+    }
+
+    // SPA (nawigacja bez przeładowania strony) -- pilnujemy zmian adresu, bo
+    // DOMContentLoaded/load odpalają się tylko raz przy pierwszym wejściu.
+    let lastPath = location.pathname;
+    setInterval(() => {
+        if (location.pathname !== lastPath) {
+            lastPath = location.pathname;
+            syncButtonVisibility();
+        }
+    }, 500);
+
+    document.addEventListener('DOMContentLoaded', syncButtonVisibility);
+    window.addEventListener('load', syncButtonVisibility);
+})();
