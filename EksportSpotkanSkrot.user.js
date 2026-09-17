@@ -39,6 +39,25 @@
         return origSetHeader.apply(this, arguments);
     };
 
+    // ---------- Podsłuch AKTUALNEGO filtra listy spotkań ----------
+    // Strona sama woła /api/meeting/by-organization-id/paged z parametrami
+    // filtra (search/searchFields/kindId/itd. -- dokładnych nazw dla filtra
+    // "Rodzaje spotkań" nie znamy, więc zamiast zgadywać, po prostu
+    // podsłuchujemy CAŁY query string ostatniego takiego requestu strony i
+    // używamy go 1:1 przy eksporcie (nadpisując tylko page/pageSize, żeby
+    // pobrać WSZYSTKIE strony pasujące do filtra, nie tylko bieżącą).
+    let lastMeetingListParams = null;
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+        try {
+            if (typeof url === 'string' && url.indexOf('/api/meeting/by-organization-id/paged') !== -1) {
+                const qIndex = url.indexOf('?');
+                if (qIndex !== -1) lastMeetingListParams = new URLSearchParams(url.slice(qIndex + 1));
+            }
+        } catch (e) { /* ignoruj -- w najgorszym razie eksport pobierze bez filtra */ }
+        return origOpen.apply(this, arguments);
+    };
+
     function apiBase(port) {
         return 'http://' + location.hostname + ':' + port;
     }
@@ -52,9 +71,18 @@
 
     // ---------- Fetche danych ----------
     function fetchMeetings() {
+        // Baza to dokładnie to, co strona sama ostatnio wysłała (patrz podsłuch
+        // wyżej) -- więc dowolny aktywny filtr (search, kind itd.) jest
+        // zachowany 1:1. Brak podsłuchanego requestu (np. eksport kliknięty
+        // zanim strona zdążyła cokolwiek pobrać) -> pusty filtr, jak dotychczas.
+        // page/pageSize zawsze nadpisujemy, żeby przejść WSZYSTKIE strony.
         const all = [];
         function page(p) {
-            const qs = new URLSearchParams({ page: p, pageSize: 200, organizationId: ORG_ID, orderBy: 'meetingTime', ascending: 'true' });
+            const qs = lastMeetingListParams ? new URLSearchParams(lastMeetingListParams) : new URLSearchParams();
+            qs.set('page', p);
+            qs.set('pageSize', 200);
+            if (!qs.has('orderBy')) qs.set('orderBy', 'meetingTime');
+            if (!qs.has('ascending')) qs.set('ascending', 'true');
             return authFetch(apiBase(BENEFICIARY_PORT) + '/api/meeting/by-organization-id/paged?' + qs).then((data) => {
                 const items = data.results || [];
                 all.push(...items);
@@ -154,7 +182,8 @@
             alert('Nie złapałem jeszcze tokena logowania — odśwież stronę, poczekaj aż się w pełni załaduje, i spróbuj ponownie.');
             return;
         }
-        setButtonState('Pobieranie listy...', true);
+        const activeSearch = lastMeetingListParams && lastMeetingListParams.get('search');
+        setButtonState(activeSearch ? `Pobieranie (filtr: "${activeSearch}")...` : 'Pobieranie listy...', true);
         Promise.all([
             fetchDictionaryByKind(72),
             fetchDictionaryByKind(94),
