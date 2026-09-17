@@ -300,9 +300,13 @@ def fetch_dictionary_by_kind(client, kind_id):
 def fetch_visitors(client, org_id, type_list):
     """POTWIERDZONE przechwyconym ruchem: GET .../visitor/by-organization-id?typeList=<3|4>
     (3 = mieszkańcy, 4 = pracownicy -- ustalone z przykładowych pól odpowiedzi:
-    typeList=3 ma 'pesel'/'status', typeList=4 ma 'occupationName')."""
+    typeList=3 ma 'pesel'/'status', typeList=4 ma 'occupationName').
+    UWAGA: przechwycony request NIE MA parametru organizationId (tylko
+    typeList) -- serwer najwyraźniej ustala organizację z samego tokena.
+    org_id tu przyjmowane tylko dla spójności sygnatury z resztą modułu,
+    NIE wysyłane."""
     r, err = client._get(f"{client.servers['auth']}/api/visitor/by-organization-id",
-                         params={"organizationId": org_id, "typeList": type_list})
+                         params={"typeList": type_list})
     if err or r is None or r.status_code != 200:
         logging.error(f"Błąd pobierania visitor typeList={type_list}: {err or (r and r.status_code)}")
         return []

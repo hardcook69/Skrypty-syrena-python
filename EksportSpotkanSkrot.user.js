@@ -74,7 +74,12 @@
     }
 
     function fetchVisitors(typeList) {
-        const qs = new URLSearchParams({ organizationId: ORG_ID, typeList });
+        // UWAGA: w przechwyconym ruchu ten request NIE MA parametru
+        // organizationId (tylko typeList) -- serwer najwyraźniej ustala
+        // organizację z samego tokena. Wcześniej dokładaliśmy organizationId
+        // "na wszelki wypadek"; usunięte, żeby dokładnie odzwierciedlać
+        // potwierdzony ruch zamiast zgadywać.
+        const qs = new URLSearchParams({ typeList });
         return authFetch(apiBase(AUTH_PORT) + '/api/visitor/by-organization-id?' + qs).catch(() => []);
     }
 
