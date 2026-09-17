@@ -318,11 +318,47 @@ def _visitor_label(v):
     return f"{v.get('surname', '')} {v.get('firstName', '')}".strip() or f"#{v.get('id')}"
 
 
+def fetch_all_beneficiaries(client, org_id):
+    """Dodatkowe źródło ID/nazwisk mieszkańców -- ZAŁOŻENIE do zweryfikowania:
+    użytkownik potwierdził, że pola uczestników spotkania (leaders/members/
+    subjects/plannedSubjects) zawierają ID mieszkańców, ale nie wiadomo czy
+    to ta sama przestrzeń ID co /api/visitor (typeList=3) czy ta z
+    /api/beneficiary (używana gdzie indziej w tym repo, np.
+    audyt_mieszkancow_gui.py). Zamiast zgadywać którą, pobieramy WSZYSTKICH
+    mieszkańców (bez filtra statusu, żeby złapać też nieaktywnych/wypisanych,
+    do których spotkanie może się jeszcze odnosić) i łączymy z listą z
+    /api/visitor przy dopasowywaniu uczestników."""
+    url = f"{client.servers['beneficiary']}/api/beneficiary/by-organization-id/paged"
+    page, page_size, all_items = 1, 200, []
+    while True:
+        params = {"page": page, "pageSize": page_size, "organizationId": org_id}
+        r, err = client._get(url, params=params)
+        if err or r is None or r.status_code != 200:
+            logging.error(f"Błąd pobierania wszystkich mieszkańców (beneficiary) org={org_id} str.{page}: "
+                          f"{err or (r and r.status_code)}")
+            break
+        try:
+            data = r.json()
+        except Exception as e:
+            logging.error(f"Wszyscy mieszkańcy (beneficiary) org={org_id}: odpowiedź nie jest JSON-em: {e}")
+            break
+        items = data.get("results") or data.get("items") or data.get("data") or []
+        all_items.extend(items)
+        total_pages = data.get("totalNumberOfPages")
+        if total_pages is not None:
+            if page >= total_pages:
+                break
+        elif len(items) < page_size:
+            break
+        page += 1
+    return all_items
+
+
 def build_meeting_rows(client, org_id, meetings, progress_cb=None):
     places = {v.get("id"): v.get("content") for v in fetch_dictionary_by_kind(client, 72)}
     kinds = {v.get("id"): v.get("content") for v in fetch_dictionary_by_kind(client, 94)}
     employees = fetch_visitors(client, org_id, 4)
-    residents = fetch_visitors(client, org_id, 3)
+    residents = fetch_visitors(client, org_id, 3) + fetch_all_beneficiaries(client, org_id)
     employee_ids = {v.get("id") for v in employees}
     resident_ids = {v.get("id") for v in residents}
     name_by_id = {v.get("id"): _visitor_label(v) for v in employees + residents}

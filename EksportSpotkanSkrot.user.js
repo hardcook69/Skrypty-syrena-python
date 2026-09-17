@@ -87,6 +87,26 @@
         return (((v.surname || '') + ' ' + (v.firstName || '')).trim()) || ('#' + v.id);
     }
 
+    function fetchAllBeneficiaries() {
+        // Dodatkowe źródło ID/nazwisk mieszkańców -- ZAŁOŻENIE do zweryfikowania:
+        // użytkownik potwierdził że pola uczestników spotkania (leaders/members/
+        // subjects/plannedSubjects) zawierają ID mieszkańców, ale nie wiadomo czy
+        // to ta sama przestrzeń ID co /api/visitor (typeList=3) czy ta z
+        // /api/beneficiary. Pobieramy WSZYSTKICH mieszkańców (bez filtra statusu)
+        // i łączymy z listą z /api/visitor zamiast zgadywać, która jest właściwa.
+        const all = [];
+        function page(p) {
+            const qs = new URLSearchParams({ page: p, pageSize: 200, organizationId: ORG_ID });
+            return authFetch(apiBase(BENEFICIARY_PORT) + '/api/beneficiary/by-organization-id/paged?' + qs).then((data) => {
+                const items = data.results || [];
+                all.push(...items);
+                const totalPages = data.totalNumberOfPages;
+                if (totalPages != null ? p < totalPages : items.length === 200) return page(p + 1);
+            });
+        }
+        return page(1).then(() => all).catch(() => all);
+    }
+
     // ---------- DOM helper ----------
     function el(tag, attrs, ...children) {
         const e = document.createElement(tag);
@@ -140,10 +160,12 @@
             fetchDictionaryByKind(94),
             fetchVisitors(4),
             fetchVisitors(3),
+            fetchAllBeneficiaries(),
             fetchMeetings(),
-        ]).then(([placesArr, kindsArr, employees, residents, meetings]) => {
+        ]).then(([placesArr, kindsArr, employees, residentsVisitor, residentsBeneficiary, meetings]) => {
             const places = Object.fromEntries(placesArr.map((v) => [v.id, v.content]));
             const kinds = Object.fromEntries(kindsArr.map((v) => [v.id, v.content]));
+            const residents = residentsVisitor.concat(residentsBeneficiary);
             const employeeIds = new Set(employees.map((v) => v.id));
             const residentIds = new Set(residents.map((v) => v.id));
             const nameById = Object.fromEntries(employees.concat(residents).map((v) => [v.id, visitorLabel(v)]));
