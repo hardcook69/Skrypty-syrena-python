@@ -165,9 +165,9 @@
     // autofiltr) -- SheetJS (darmowa wersja) nie obsługuje stylowania komórek,
     // dlatego ta wersja korzysta z ExcelJS zamiast SheetJS.
     async function downloadXlsx(rows) {
-        const cols = ['Data spotkania', 'Rodzaj spotkania', 'Miejsce', 'Temat', 'Cel', 'Wnioski',
-                      'Link do spotkania', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)', 'Obserwacje'];
-        const widths = [18, 22, 20, 34, 26, 34, 26, 34, 34, 40];
+        const cols = ['Data spotkania', 'Rodzaj spotkania', 'Miejsce', 'Temat', 'Cel',
+                      'Link do spotkania', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)', 'Wnioski', 'Obserwacje'];
+        const widths = [18, 22, 20, 34, 26, 26, 34, 34, 34, 40];
         const wrapCols = new Set(['Temat', 'Cel', 'Wnioski', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)', 'Obserwacje']);
         const NAVY = 'FF1A3A6B';
         const STRIPE = 'FFEBF3FF';

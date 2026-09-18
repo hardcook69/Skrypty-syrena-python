@@ -422,9 +422,9 @@ def save_excel(out_path, rows):
 
     ws = wb.active
     ws.title = "Spotkania"
-    cols = ["Data spotkania", "Rodzaj spotkania", "Miejsce", "Temat", "Cel", "Wnioski",
-            "Link do spotkania", "Pracownicy (uczestnicy)", "Mieszkańcy (uczestnicy)", "Obserwacje"]
-    widths = [18, 22, 20, 34, 26, 34, 26, 34, 34, 40]
+    cols = ["Data spotkania", "Rodzaj spotkania", "Miejsce", "Temat", "Cel",
+            "Link do spotkania", "Pracownicy (uczestnicy)", "Mieszkańcy (uczestnicy)", "Wnioski", "Obserwacje"]
+    widths = [18, 22, 20, 34, 26, 26, 34, 34, 34, 40]
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(cols))
     c = ws["A1"]
