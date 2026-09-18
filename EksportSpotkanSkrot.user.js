@@ -166,9 +166,9 @@
     // dlatego ta wersja korzysta z ExcelJS zamiast SheetJS.
     async function downloadXlsx(rows) {
         const cols = ['Data spotkania', 'Rodzaj spotkania', 'Miejsce', 'Temat', 'Cel', 'Wnioski',
-                      'Link do spotkania', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)'];
-        const widths = [18, 22, 20, 34, 26, 34, 26, 34, 34];
-        const wrapCols = new Set(['Temat', 'Cel', 'Wnioski', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)']);
+                      'Link do spotkania', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)', 'Obserwacje'];
+        const widths = [18, 22, 20, 34, 26, 34, 26, 34, 34, 40];
+        const wrapCols = new Set(['Temat', 'Cel', 'Wnioski', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)', 'Obserwacje']);
         const NAVY = 'FF1A3A6B';
         const STRIPE = 'FFEBF3FF';
         const WHITE = 'FFFFFFFF';
@@ -294,6 +294,10 @@
                         'Link do spotkania': detail.urlLink || detail.link || '',
                         'Pracownicy (uczestnicy)': pracownicy.join(', '),
                         'Mieszkańcy (uczestnicy)': mieszkancy.join(', '),
+                        // POTWIERDZONE przez użytkownika 2026-09-18: pole 'qualifications'
+                        // na obiekcie spotkania to "Obserwacje" (zakładka "Wnioski i
+                        // obserwacje" w UI, razem z 'summary' -> Wnioski).
+                        'Obserwacje': detail.qualifications || '',
                     });
                     next(i + 1);
                 }).catch(() => next(i + 1));

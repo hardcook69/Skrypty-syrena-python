@@ -391,6 +391,10 @@ def build_meeting_rows(client, org_id, meetings, progress_cb=None):
             "Link do spotkania": detail.get("urlLink") or detail.get("link") or "",
             "Pracownicy (uczestnicy)": ", ".join(pracownicy),
             "Mieszkańcy (uczestnicy)": ", ".join(mieszkancy),
+            # POTWIERDZONE przez użytkownika 2026-09-18: pole 'qualifications'
+            # na obiekcie spotkania to "Obserwacje" (widoczne w zakładce
+            # "Wnioski i obserwacje" w UI, razem z 'summary' -> Wnioski).
+            "Obserwacje": detail.get("qualifications") or "",
         })
     return rows
 
@@ -419,8 +423,8 @@ def save_excel(out_path, rows):
     ws = wb.active
     ws.title = "Spotkania"
     cols = ["Data spotkania", "Rodzaj spotkania", "Miejsce", "Temat", "Cel", "Wnioski",
-            "Link do spotkania", "Pracownicy (uczestnicy)", "Mieszkańcy (uczestnicy)"]
-    widths = [18, 22, 20, 34, 26, 34, 26, 34, 34]
+            "Link do spotkania", "Pracownicy (uczestnicy)", "Mieszkańcy (uczestnicy)", "Obserwacje"]
+    widths = [18, 22, 20, 34, 26, 34, 26, 34, 34, 40]
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(cols))
     c = ws["A1"]
@@ -449,7 +453,8 @@ def save_excel(out_path, rows):
             cell.font = Font(name="Segoe UI", size=9)
             cell.alignment = Alignment(wrap_text=(key in ("Temat", "Cel", "Wnioski",
                                                           "Pracownicy (uczestnicy)",
-                                                          "Mieszkańcy (uczestnicy)")), vertical="top")
+                                                          "Mieszkańcy (uczestnicy)",
+                                                          "Obserwacje")), vertical="top")
 
     ws.freeze_panes = "A3"
     if rows:
