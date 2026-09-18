@@ -14,7 +14,11 @@ echo Tampermonkey pokaze okno "Zainstaluj", kliknij "Zainstaluj".
 echo.
 pause
 
-start "" "https://raw.githubusercontent.com/hardcook69/Syrena-Tempermokey/main/EksportSpotkanSkrot.user.js"
+REM UWAGA: wskazuje na plik w repo Skrypty-syrena-python (gdzie na pewno
+REM istnieje juz teraz), NIE na Syrena-Tempermokey (tam trzeba by go
+REM najpierw recznie wgrac -- to byl powod, ze poprzednia wersja tego
+REM bata nie dzialala, plik pod tamtym adresem nie istnial / 404).
+start "" "https://raw.githubusercontent.com/hardcook69/Skrypty-syrena-python/claude/skills-package-install-nbqe08/EksportSpotkanSkrot.user.js"
 
 echo.
 echo ============================================================
