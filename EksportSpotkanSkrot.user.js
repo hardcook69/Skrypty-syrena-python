@@ -7,7 +7,7 @@
 // @description  Przycisk widoczny TYLKO na stronie /meetings, eksportujący listę spotkań (ze szczegółami i uczestnikami podzielonymi na pracownicy/mieszkańcy) do pliku .xlsx wprost z przeglądarki - odpowiednik eksport_spotkan_gui.py, ale bez osobnego logowania (używa tokena sesji, którą masz już otwartą).
 // @match        *://apedps01.bzmw.gov.pl/*
 // @match        *://ttapedps01.bzmw.gov.pl/*
-// @require      https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
+// @require      https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
@@ -160,22 +160,80 @@
         btn.style.cursor = disabled ? 'default' : 'pointer';
     }
 
-    function downloadXlsx(rows) {
+    // Ten sam wygląd co save_excel()/save_tasks_excel() w eksport_spotkan_gui.py
+    // (granatowy nagłówek, obramowania, naprzemienne wiersze, zamrożony nagłówek,
+    // autofiltr) -- SheetJS (darmowa wersja) nie obsługuje stylowania komórek,
+    // dlatego ta wersja korzysta z ExcelJS zamiast SheetJS.
+    async function downloadXlsx(rows) {
         const cols = ['Data spotkania', 'Rodzaj spotkania', 'Miejsce', 'Temat', 'Cel', 'Wnioski',
                       'Link do spotkania', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)'];
-        const aoa = [cols].concat(rows.map((r) => cols.map((c) => r[c] || '')));
-        const ws = XLSX.utils.aoa_to_sheet(aoa);
-        ws['!cols'] = [{ wch: 18 }, { wch: 22 }, { wch: 20 }, { wch: 34 }, { wch: 26 },
-                       { wch: 34 }, { wch: 26 }, { wch: 34 }, { wch: 34 }];
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Spotkania');
+        const widths = [18, 22, 20, 34, 26, 34, 26, 34, 34];
+        const wrapCols = new Set(['Temat', 'Cel', 'Wnioski', 'Pracownicy (uczestnicy)', 'Mieszkańcy (uczestnicy)']);
+        const NAVY = 'FF1A3A6B';
+        const STRIPE = 'FFEBF3FF';
+        const WHITE = 'FFFFFFFF';
+
+        function thinBorder() {
+            const s = { style: 'thin', color: { argb: 'FFD1D5DB' } };
+            return { left: s, right: s, top: s, bottom: s };
+        }
+
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Spotkania');
+        ws.columns = widths.map((w) => ({ width: w }));
+
+        // Wiersz 1: scalony tytuł
+        ws.addRow([]);
+        ws.mergeCells(1, 1, 1, cols.length);
+        const titleCell = ws.getCell(1, 1);
+        titleCell.value = 'Spotkania  |  ' + new Date().toLocaleString('pl-PL') + '  |  ' + rows.length + ' spotkań';
+        titleCell.font = { name: 'Segoe UI', bold: true, size: 12, color: { argb: WHITE } };
+        titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        ws.getRow(1).height = 26;
+
+        // Wiersz 2: nagłówki kolumn
+        const headerRow = ws.addRow(cols);
+        headerRow.eachCell((cell) => {
+            cell.font = { name: 'Segoe UI', bold: true, size: 10, color: { argb: WHITE } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+            cell.alignment = { horizontal: 'center' };
+            cell.border = thinBorder();
+        });
+
+        // Wiersze danych
+        rows.forEach((r, i) => {
+            const row = ws.addRow(cols.map((c) => r[c] || ''));
+            const bg = i % 2 === 0 ? STRIPE : WHITE;
+            row.eachCell((cell, colNumber) => {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } };
+                cell.font = { name: 'Segoe UI', size: 9 };
+                cell.border = thinBorder();
+                cell.alignment = { vertical: 'top', wrapText: wrapCols.has(cols[colNumber - 1]) };
+            });
+        });
+
+        ws.views = [{ state: 'frozen', ySplit: 2 }];
+        if (rows.length) {
+            ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2 + rows.length, column: cols.length } };
+        }
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
         const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-        XLSX.writeFile(wb, 'spotkania_' + stamp + '.xlsx');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'spotkania_' + stamp + '.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     function runExport() {
-        if (typeof XLSX === 'undefined') {
-            alert('Biblioteka do zapisu .xlsx nie wczytała się (brak dostępu do CDN?). Sprawdź połączenie i odśwież stronę.');
+        if (typeof ExcelJS === 'undefined') {
+            alert('Biblioteka do zapisu .xlsx (ExcelJS) nie wczytała się (brak dostępu do CDN?). Sprawdź połączenie i odśwież stronę.');
             return;
         }
         if (!capturedToken) {
@@ -202,8 +260,13 @@
             const rows = [];
             function next(i) {
                 if (i >= meetings.length) {
-                    downloadXlsx(rows);
-                    setButtonState('📊 Eksport spotkań do Excela', false);
+                    setButtonState('Zapisywanie pliku...', true);
+                    downloadXlsx(rows).then(() => {
+                        setButtonState('📊 Eksport spotkań do Excela', false);
+                    }).catch((e) => {
+                        alert('Błąd zapisu pliku: ' + e.message);
+                        setButtonState('📊 Eksport spotkań do Excela', false);
+                    });
                     return;
                 }
                 const m = meetings[i];
