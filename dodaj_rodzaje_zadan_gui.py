@@ -303,9 +303,14 @@ def find_value_id_by_content(values, wanted_content, field_label):
 # grupy "psycholog" (nie jest terapeutą). Pokojowa/pielęgniarka/fizjoterapia
 # sprawdzone ponownie względem tych plików -- bez zmian, brak w nich
 # dodatkowych wariantów spoza już zgrupowanych.
+# Poprawka 2026-09-21 #2 (ustalona z użytkownikiem): "opiekun medyczny" NIE
+# jest już połączony z pielęgniarkami -- ma własną, osobną grupę
+# "opiekun_medyczny" (OPIEKUN MEDYCZNY, STARSZY OPIEKUN MEDYCZNY), a grupa
+# "pielegniarka" zawiera już tylko PIELĘGNIARKA/STARSZA PIELĘGNIARKA.
 STANOWISKO_GROUPS = {
     "opiekun": {"OPIEKUN", "STARSZY OPIEKUN", "MŁODSZY OPIEKUN", "STARSZY OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ", "OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ"},
-    "pielegniarka": {"PIELĘGNIARKA", "STARSZA PIELĘGNIARKA", "OPIEKUN MEDYCZNY", "STARSZY OPIEKUN MEDYCZNY"},
+    "pielegniarka": {"PIELĘGNIARKA", "STARSZA PIELĘGNIARKA"},
+    "opiekun_medyczny": {"OPIEKUN MEDYCZNY", "STARSZY OPIEKUN MEDYCZNY"},
     "pokojowa": {"POKOJOWA", "STARSZA POKOJOWA"},
     "ratownik_medyczny": {"RATOWNIK MEDYCZNY", "STARSZY RATOWNIK MEDYCZNY"},
     "administracja_jednostka": {"STARSZY INSPEKTOR DS.  ADMINISTRACYJNYCH", "INSPEKTOR DS. ADMINISTRACYJNYCH", "PODINSPEKTOR DS. ADMINISTRACYJNYCH"},
@@ -379,7 +384,7 @@ def expand_stanowisko_ids(values, matched_id):
 # przejrzenia (NIGDY po cichu).
 EXCEL_GRUPA_ZAWODOWA_TO_STANOWISKO_GROUPS = {
     "PERSONEL OPIEKUŃCZY": ["opiekun"],
-    "PERSONEL OPIEKUŃCZO-MEDYCZNY": ["pielegniarka"],
+    "PERSONEL OPIEKUŃCZO-MEDYCZNY": ["pielegniarka", "opiekun_medyczny"],
     "PERSONEL PIELĘGNIARSKI": ["pielegniarka"],
     "PERSONEL SPRZĄTAJĄCY": ["pokojowa"],
     "PERSONEL SOCJALNY": ["praca_socjalna"],
