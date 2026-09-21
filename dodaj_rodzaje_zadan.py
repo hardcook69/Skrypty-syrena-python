@@ -342,9 +342,11 @@ def find_value_id_by_grupa_zawodowa(values, wanted_content, grupa_zawodowa_text,
     wymienione tam etykiety, mapuje na grupy z STANOWISKO_GROUPS i szuka
     NAJLEPSZEGO dopasowania treści ze Stanowiska wśród stanowisk z tych
     grup -- bez progu odcięcia (użytkownik: "na pewno są w systemie", więc
-    zawsze wybieramy najbliższe), ale ZAWSZE z notatką do przejrzenia.
-    Zwraca (id, notatka) albo (None, None), jeśli kolumna pusta/etykieta
-    nierozpoznana albo brak kandydatów w słowniku."""
+    zawsze wybieramy najbliższe), ale ZAWSZE z notatką do przejrzenia,
+    wypisującą PO PRZECINKU wszystkie stanowiska z grupy dopasowanego
+    kandydata, do których zadanie faktycznie zostanie przypisane (patrz
+    expand_stanowisko_ids). Zwraca (id, notatka) albo (None, None), jeśli
+    kolumna pusta/etykieta nierozpoznana albo brak kandydatów w słowniku."""
     if not grupa_zawodowa_text:
         return None, None
     labels = [x.strip().upper() for x in grupa_zawodowa_text.split(",") if x.strip()]
@@ -362,18 +364,23 @@ def find_value_id_by_grupa_zawodowa(values, wanted_content, grupa_zawodowa_text,
     if not close:
         return None, None
     matched = by_upper[close[0]]
+    final_ids = expand_stanowisko_ids(values, matched.get("id"))
+    final_names = ", ".join(sorted((v.get("content") or "") for v in values if v.get("id") in final_ids))
     note = (f"pole '{field_label}': '{wanted_content.strip()}' nie znaleziono w słowniku -- "
-           f"dopasowano po grupie zawodowej z Excela ('{grupa_zawodowa_text}') do "
-           f"'{matched.get('content')}' -- SPRAWDŹ, czy to na pewno o to stanowisko chodziło.")
+           f"dopasowano po grupie zawodowej z Excela ('{grupa_zawodowa_text}') -- zadanie zostanie "
+           f"przypisane do stanowisk: {final_names} -- SPRAWDŹ, czy to na pewno o to chodziło.")
     return matched.get("id"), note
 
 
 # Znane niedopasowania z Excela, które regularnie się powtarzają w różnych
 # plikach i mają jednoznaczne, wcześniej rozstrzygnięte z użytkownikiem
 # dopasowanie do grupy zawodowej -- działa NIEZALEŻNIE od tego, czy w danym
-# pliku jest (jeszcze) kolumna "Grupa zawodowa". Rozstrzygnięte 2026-08-28:
-# "Instruktor terapii zajęciowej" -> grupa terapii zajęciowej (nie istnieje
-# jako osobne stanowisko w słowniku).
+# pliku jest (jeszcze) kolumna "Grupa zawodowa". Rozstrzygnięte 2026-08-28,
+# potwierdzone ponownie 2026-09-21: "Instruktor terapii zajęciowej" to
+# stanowisko, którego już NIE MA w systemie pod tą nazwą -- odpowiednik to
+# teraz "Terapeuta zajęciowy" (grupa "terapia_zajeciowa", która po korekcie
+# z 2026-09-21 obejmuje też Terapeutę/Starszego Terapeutę/Starszego Terapeutę
+# Zajęciowego -- zadanie dostaje WSZYSTKIE z nich, nie tylko jedno).
 STANOWISKO_ALIASES = {
     "INSTRUKTOR TERAPII ZAJĘCIOWEJ": "terapia_zajeciowa",
 }
@@ -383,9 +390,12 @@ def find_value_id_by_alias(values, wanted_content, field_label):
     """Dopasowanie dla 'Stanowisko' przez znane, wcześniej rozstrzygnięte
     niedopasowania z Excela (patrz STANOWISKO_ALIASES) -- próbowane PRZED
     find_value_id_by_grupa_zawodowa, bo nie zależy od obecności kolumny
-    'Grupa zawodowa' w pliku. Zawsze z notatką do przejrzenia. Zwraca (id,
-    notatka) albo (None, None), jeśli treść nie jest znanym aliasem albo w
-    słowniku brakuje choćby jednego stanowiska z tej grupy."""
+    'Grupa zawodowa' w pliku. Zawsze z notatką do przejrzenia, wypisującą PO
+    PRZECINKU wszystkie stanowiska z grupy, do których zadanie faktycznie
+    zostanie przypisane (nie tylko najbliższe dopasowanie tekstowe -- patrz
+    expand_stanowisko_ids). Zwraca (id, notatka) albo (None, None), jeśli
+    treść nie jest znanym aliasem albo w słowniku brakuje choćby jednego
+    stanowiska z tej grupy."""
     group_key = STANOWISKO_ALIASES.get(wanted_content.strip().upper())
     if group_key is None:
         return None, None
@@ -396,8 +406,10 @@ def find_value_id_by_alias(values, wanted_content, field_label):
         return None, None
     close = difflib.get_close_matches(wanted_content.strip().upper(), list(by_upper.keys()), n=1, cutoff=0)
     matched = by_upper[close[0]] if close else next(iter(by_upper.values()))
-    note = (f"pole '{field_label}': '{wanted_content.strip()}' nie znaleziono w słowniku -- "
-           f"znane niedopasowanie, dopasowano do '{matched.get('content')}'.")
+    final_ids = expand_stanowisko_ids(values, matched.get("id"))
+    final_names = ", ".join(sorted((v.get("content") or "") for v in values if v.get("id") in final_ids))
+    note = (f"pole '{field_label}': '{wanted_content.strip()}' nie znaleziono w słowniku (stanowisko "
+           f"już nie istnieje pod tą nazwą) -- zadanie zostanie przypisane do stanowisk: {final_names}.")
     return matched.get("id"), note
 
 
