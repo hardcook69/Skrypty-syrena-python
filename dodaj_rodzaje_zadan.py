@@ -240,8 +240,19 @@ def find_value_id_by_content(values, wanted_content, field_label):
 # osobną parę zamiast trafiać do grupy "opiekun". Stanowiska spoza tej mapy
 # (np. kadry, księgowość, kierownictwo) dopasowują się tylko dokładnie do
 # siebie -- patrz expand_stanowisko_ids().
+# Poprawka 2026-09-21 (ustalona z użytkownikiem, na podstawie Stanowisko_2.xlsx
+# i Grupa_zawodowa.xlsx): "opiekun" obejmuje TERAZ wszystkie niemedyczne
+# warianty łącznie z "kwalifikowanymi" (STARSZY OPIEKUN KWALIFIKOWANY W DOMU
+# POMOCY SPOŁECZNEJ, OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ) -- dawna
+# grupa "opiekun_kwalifikowany" zawierająca je razem z LEKARZ została
+# rozbita: LEKARZ ma teraz własną grupę "lekarz". Terapeuci połączeni w
+# jedną grupę "terapia_zajeciowa" (TERAPEUTA, STARSZY TERAPEUTA, TERAPEUTA
+# ZAJĘCIOWY, STARSZY TERAPEUTA ZAJĘCIOWY), a PSYCHOLOG wydzielony do własnej
+# grupy "psycholog" (nie jest terapeutą). Pokojowa/pielęgniarka/fizjoterapia
+# sprawdzone ponownie względem tych plików -- bez zmian, brak w nich
+# dodatkowych wariantów spoza już zgrupowanych.
 STANOWISKO_GROUPS = {
-    "opiekun": {"OPIEKUN", "STARSZY OPIEKUN", "MŁODSZY OPIEKUN"},
+    "opiekun": {"OPIEKUN", "STARSZY OPIEKUN", "MŁODSZY OPIEKUN", "STARSZY OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ", "OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ"},
     "pielegniarka": {"PIELĘGNIARKA", "STARSZA PIELĘGNIARKA", "OPIEKUN MEDYCZNY", "STARSZY OPIEKUN MEDYCZNY"},
     "pokojowa": {"POKOJOWA", "STARSZA POKOJOWA"},
     "ratownik_medyczny": {"RATOWNIK MEDYCZNY", "STARSZY RATOWNIK MEDYCZNY"},
@@ -268,15 +279,15 @@ STANOWISKO_GROUPS = {
     "rehabilitacja_ruchowa": {"FIZJOTERAPEUTA", "TECHNIK FIZJOTERAPII", "STARSZY TECHNIK FIZJOTERAPII", "STARSZY FIZJOTERAPEUTA", "TECHNIK MASAŻYSTA", "STARSZY TECHNIK MASAŻYSTA"},
     "religijne": {"KAPELAN"},
     "rzemieslnicze": {"KONSERWATOR", "ROBOTNIK GOSPODARCZY", "STARSZY KONSERWATOR"},
-    "terapia_zajeciowa": {"STARSZY TERAPEUTA ZAJĘCIOWY", "TERAPEUTA ZAJĘCIOWY"},
-    "psychologiczno_terapeutyczne": {"PSYCHOLOG", "STARSZY TERAPEUTA", "TERAPEUTA"},
+    "terapia_zajeciowa": {"STARSZY TERAPEUTA ZAJĘCIOWY", "TERAPEUTA ZAJĘCIOWY", "STARSZY TERAPEUTA", "TERAPEUTA"},
+    "psycholog": {"PSYCHOLOG"},
     "zamowienia_publiczne": {"INSPEKTOR DS. ZAMÓWIEŃ PUBLICZNYCH", "PODINSPEKTOR DS.ZAMÓWIEŃ PUBLICZNYCH", "STARSZY INSPEKTOR DS. ZAMÓWIEŃ PUBLICZNYCH"},
     "transport": {"KIEROWCA SAMOCHODU OSOBOWEGO"},
     "zywienie": {"STARSZY KUCHARZ", "KUCHARZ"},
     "kierowanie_wtz": {"KIEROWNIK WARSZTATU TERAPII ZAJĘCIOWEJ"},
     "kierowanie_dzialem": {"GŁÓWNY KSIĘGOWY", "KIEROWNIK DZIAŁU OPIEKUŃCZO-TERAPETYCZNEGO", "KIEROWNIK DZIAŁU MEDYCZNO-TERAPEUTYCZNEGO", "ZASTĘPCA KIEROWNIKA DZIAŁU OPIEKUŃCZO-TERAPEUTYCZNEGO"},
     "kierowanie_warsztatem": {"KIEROWNIK WARSZTATU"},
-    "opiekun_kwalifikowany": {"LEKARZ", "STARSZY OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ", "OPIEKUN KWALIFIKOWANY W DOMU POMOCY SPOŁECZNEJ"},
+    "lekarz": {"LEKARZ"},
     "dyrektor": {"DYREKTOR"},
     "zastepca_dyrektora": {"ZASTĘPCA DYREKTORA"},
 }
@@ -320,7 +331,7 @@ EXCEL_GRUPA_ZAWODOWA_TO_STANOWISKO_GROUPS = {
     "PERSONEL PIELĘGNIARSKI": ["pielegniarka"],
     "PERSONEL SPRZĄTAJĄCY": ["pokojowa"],
     "PERSONEL SOCJALNY": ["praca_socjalna"],
-    "PERSONEL TERAPEUTYCZNY": ["rehabilitacja_ruchowa", "kulturalno_oswiatowe", "terapia_zajeciowa", "psychologiczno_terapeutyczne"],
+    "PERSONEL TERAPEUTYCZNY": ["rehabilitacja_ruchowa", "kulturalno_oswiatowe", "terapia_zajeciowa", "psycholog"],
 }
 
 
