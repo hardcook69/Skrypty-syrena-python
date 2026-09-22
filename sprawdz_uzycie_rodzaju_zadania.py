@@ -56,6 +56,14 @@ ENVS = {
 }
 
 TIMEOUT = 20
+# /api/task/by-organization-id zwraca (jak widać w praktyce) całą listę zadań
+# organizacji naraz, bez działającego stronicowania (patrz ostrzeżenie w
+# fetch_active_tasks) -- dla organizacji z dużą liczbą zadań to bywa wolne i
+# potrafi przekroczyć TIMEOUT=20s. TASK_TIMEOUT/TASK_TIMEOUT_RETRY to ten sam
+# wzorzec "spróbuj dłużej po timeout" co AUDIT_TIMEOUT/AUDIT_TIMEOUT_RETRY w
+# audyt_mieszkancow_gui.py.
+TASK_TIMEOUT = 60
+TASK_TIMEOUT_RETRY = 180
 ZADANIA_DICTIONARY_ID = 53
 
 logger = logging.getLogger("sprawdz_uzycie_rodzaju_zadania")
@@ -120,10 +128,14 @@ class Client:
             return True
         return False
 
-    def _get(self, url, params=None, _retry=True):
-        logger.debug(f"GET {url} params={params}")
+    def _get(self, url, params=None, _retry=True, timeout=None):
+        timeout = timeout or TIMEOUT
+        logger.debug(f"GET {url} params={params} timeout={timeout}")
         try:
-            r = self.s.get(url, params=params, timeout=TIMEOUT)
+            r = self.s.get(url, params=params, timeout=timeout)
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Timeout przy GET {url} (limit={timeout}s): {e}")
+            return None, f"TIMEOUT:{e}"
         except Exception as e:
             logger.error(f"Wyjątek przy GET {url}: {e}")
             return None, str(e)
@@ -152,7 +164,11 @@ def fetch_active_tasks(client, org_id):
     page, page_size, all_items, warned = 1, 200, [], False
     while True:
         params = {"page": page, "pageSize": page_size, "organizationId": org_id}
-        r, err = client._get(url, params=params)
+        r, err = client._get(url, params=params, timeout=TASK_TIMEOUT)
+        if err and err.startswith("TIMEOUT:"):
+            logger.warning(f"Zadania org={org_id} str.{page}: timeout po {TASK_TIMEOUT}s "
+                           f"— ponawiam z limitem {TASK_TIMEOUT_RETRY}s...")
+            r, err = client._get(url, params=params, timeout=TASK_TIMEOUT_RETRY)
         if err or r is None:
             logger.error(f"Błąd pobierania zadań org={org_id} str.{page}: {err}")
             break
@@ -197,7 +213,11 @@ def fetch_deleted_tasks(client, org_id):
     while True:
         params = {"page": page, "pageSize": page_size, "organizationId": org_id,
                   "orderBy": "id", "ascending": "true"}
-        r, err = client._get(url, params=params)
+        r, err = client._get(url, params=params, timeout=TASK_TIMEOUT)
+        if err and err.startswith("TIMEOUT:"):
+            logger.warning(f"Usunięte zadania org={org_id} str.{page}: timeout po {TASK_TIMEOUT}s "
+                           f"— ponawiam z limitem {TASK_TIMEOUT_RETRY}s...")
+            r, err = client._get(url, params=params, timeout=TASK_TIMEOUT_RETRY)
         if err or r is None:
             logger.error(f"Błąd pobierania usuniętych zadań org={org_id} str.{page}: {err}")
             break
@@ -328,6 +348,7 @@ def main():
             print(f"  ⚠ W słowniku 53 tej organizacji NIE MA wpisu o ID={args.task_kind_id} "
                   f"— dopasowanie po nazwie będzie pominięte dla tej organizacji.")
 
+        print("  Pobieranie zadań... (organizacje z dużą liczbą zadań mogą potrwać nawet kilka minut)")
         active = fetch_active_tasks(client, org_id)
         deleted = fetch_deleted_tasks(client, org_id)
         all_tasks = active + deleted
