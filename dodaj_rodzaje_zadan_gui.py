@@ -470,30 +470,44 @@ def find_value_id_by_alias(values, wanted_content, field_label):
     return matched.get("id"), note
 
 
-_DURATION_RANGE_RE = re.compile(r"\d+(?:[.,]\d+)?\s*-\s*\d+(?:[.,]\d+)?\s*(minut|min\.?\b|godzin|h\b)")
+_DURATION_RANGE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*-\s*(\d+(?:[.,]\d+)?)\s*(minut|min\.?\b|godzin|h\b)")
 _DURATION_VALUE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(minut\w*|min\.?\b|godzin\w*|h\b)")
+
+# Gdy opis czasu nie zawiera ŻADNEJ liczby (np. "W zależności od potrzeb") —
+# przyjmujemy tę wartość domyślną (potwierdzone z użytkownikiem). Zadanie
+# powstaje z czasem szacunkowym, oznaczonym notatką ⚠, do ewentualnej korekty.
+DEFAULT_DURATION_MIN = 30
 
 
 def parse_duration_minutes(text):
-    """'30 minut' -> 30, '1 godzina' -> 60, '2 godziny' -> 120, '30 min' -> 30,
-    '1 h' -> 60. Szuka liczby z jednostką GDZIEKOLWIEK w tekście (nie tylko na
-    początku wiersza) i rozpoznaje skróty 'min'/'h' -- w Excelu czas bywa
-    zapisany jako np. 'DOT B – gr IV – 50 minut' albo '30 min dla całej grupy
-    mieszkańców'. Jeśli w tekście jest ZAKRES (np. '1-1,5 h, 2x dziennie') nie
-    zgadujemy, który koniec zakresu wybrać, i zwracamy None -- tak samo jak
-    dla tekstu bez żadnej jawnej liczby+jednostki (np. 'W zależności od
-    potrzeb')."""
+    """Zwraca (minuty, notatka). '30 minut' -> (30, None), '1 godzina' ->
+    (60, None), '30 min' -> (30, None), '1 h' -> (60, None). Szuka liczby z
+    jednostką GDZIEKOLWIEK w tekście i rozpoznaje skróty 'min'/'h' -- w Excelu
+    czas bywa zapisany jako np. 'DOT B – gr IV – 50 minut'.
+
+    Potwierdzone z użytkownikiem reguły dla przypadków niejednoznacznych
+    (notatka != None, żeby oznaczyć wartość szacunkową w logu jako ⚠):
+      - ZAKRES (np. '1-1,5 h', '2-3 godziny') -> ŚRODEK zakresu.
+      - tekst z treścią, ale BEZ żadnej liczby+jednostki (np. 'W zależności od
+        potrzeb') -> DEFAULT_DURATION_MIN.
+    (None, None) tylko dla PUSTEGO pola -- to zgłasza wywołujący jako błąd."""
     t = (text or "").strip().lower()
     if not t:
-        return None
-    if _DURATION_RANGE_RE.search(t):
-        return None
+        return None, None
+    rng = _DURATION_RANGE_RE.search(t)
+    if rng:
+        lo = float(rng.group(1).replace(",", "."))
+        hi = float(rng.group(2).replace(",", "."))
+        factor = 60 if (rng.group(3).startswith("godzin") or rng.group(3) == "h") else 1
+        mid = int(round((lo + hi) / 2 * factor))
+        return mid, f"czas podany jako zakres '{(text or '').strip()}' — przyjęto środek: {mid} min"
     m = _DURATION_VALUE_RE.search(t)
-    if not m:
-        return None
-    n = float(m.group(1).replace(",", "."))
-    is_hours = m.group(2).startswith("godzin") or m.group(2) == "h"
-    return int(round(n * 60 if is_hours else n))
+    if m:
+        n = float(m.group(1).replace(",", "."))
+        is_hours = m.group(2).startswith("godzin") or m.group(2) == "h"
+        return int(round(n * 60 if is_hours else n)), None
+    return DEFAULT_DURATION_MIN, (f"brak liczby w czasie '{(text or '').strip()}' — "
+                                  f"przyjęto domyślne {DEFAULT_DURATION_MIN} min")
 
 
 def resolve_task_value_attributes(client, structure_elements, row, side, dict_value_cache,
@@ -521,9 +535,11 @@ def resolve_task_value_attributes(client, structure_elements, row, side, dict_va
             if note: notes.append(note)
 
         elif name == "czas normatywny":
-            value = parse_duration_minutes(row["czas_realizacji"])
+            value, dur_note = parse_duration_minutes(row["czas_realizacji"])
             if value is None:
-                return None, f"Nie rozpoznano czasu trwania '{row['czas_realizacji']}' (oczekiwano np. '30 minut', '1 godzina').", notes
+                return None, "Brak czasu realizacji (puste pole) — uzupełnij w Excelu.", notes
+            if dur_note:
+                notes.append(dur_note)
 
         elif name == "stanowisko":
             names = [x.strip() for x in (row["stanowisko"] or "").split(",") if x.strip()]
@@ -796,10 +812,67 @@ def plan_tasks(rows, existing_by_content):
                 resident_planned[key] = row
         content_lower = row["zadanie_pracownik"].lower()
         if content_lower in existing_by_content:
-            skipped.append(row["zadanie_pracownik"])
+            skipped.append(row)   # cały wiersz — potrzebny do kontroli usługi
             continue
         employee_planned.append(row)
     return list(resident_planned.values()), employee_planned, skipped
+
+
+def usluga_skip_warnings(client, structure, rows, existing_full_by_content):
+    """Dla zadań POMIJANYCH (nazwa już istnieje w słowniku 53) sprawdza, czy
+    istniejąca pozycja wskazuje tę samą usługę (pole 'Rodzaj usługi', słownik
+    51), co podaje Excel. Zwraca listę ostrzeżeń dla pozycji, które wskazują
+    INNĄ usługę albo nie mają jej wcale — typowa pozostałość po wcześniejszym
+    imporcie, która nie podepnie się do świeżej usługi z Excela. Tylko odczyt."""
+    usluga_elem = next((e for e in structure
+                        if (e.get("name") or "").strip().lower() == "rodzaj usługi"), None)
+    if usluga_elem is None:
+        return []
+    usluga_attr_kind = usluga_elem.get("elementKind")
+    usluga_dict_id = usluga_elem.get("elementDictionaryId")
+    usluga_values = fetch_dictionary_values(client, usluga_dict_id) if usluga_dict_id else []
+
+    def existing_usluga_id(v):
+        for a in (v.get("valueAttributes") or []):
+            if a.get("attributeKind") == usluga_attr_kind:
+                return a.get("value")
+        return None
+
+    wanted_cache = {}
+    def wanted_usluga_id(name):
+        if not name:
+            return None
+        if name not in wanted_cache:
+            vid, err, _ = find_value_id_by_content(usluga_values, name, "Rodzaj usługi")
+            wanted_cache[name] = None if err else vid
+        return wanted_cache[name]
+
+    warns = []
+    seen = set()
+    def check(content, excel_usluga):
+        key = (content or "").strip().lower()
+        if not key or key in seen:
+            return
+        v = existing_full_by_content.get(key)
+        if v is None:
+            return
+        seen.add(key)
+        have = existing_usluga_id(v)
+        want = wanted_usluga_id(excel_usluga)
+        if want is None:
+            return
+        if have is None:
+            warns.append(f"'{content}' — istnieje (id={v.get('id')}), ale NIE MA przypisanej usługi; "
+                         f"Excel chce '{excel_usluga}' (id={want}).")
+        elif have != want:
+            warns.append(f"'{content}' — istnieje (id={v.get('id')}), ale wskazuje usługę id={have}, "
+                         f"a Excel chce '{excel_usluga}' (id={want}).")
+
+    for row in rows:
+        if row["zadanie_mieszkaniec"]:
+            check(row["zadanie_mieszkaniec"], row["usluga_mieszkaniec"])
+        check(row["zadanie_pracownik"], row["usluga_pracownik"])
+    return warns
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1034,8 +1107,14 @@ class App(ttkb.Window):
 
             existing = fetch_dictionary_values(self.client, ZADANIA_DICTIONARY_ID)
             existing_by_content = {(v.get("content") or "").strip().lower(): v.get("id") for v in existing}
+            existing_full_by_content = {(v.get("content") or "").strip().lower(): v for v in existing}
 
             resident_to_create, employee_to_create, skipped = plan_tasks(rows, existing_by_content)
+
+            # Kontrola: czy POMIJANE (już istniejące) pozycje wskazują tę samą
+            # usługę co Excel. Rozjazd = pozostałość po wcześniejszym imporcie,
+            # która nie podepnie się do świeżej usługi — ostrzegamy GŁOŚNO.
+            usluga_warnings = usluga_skip_warnings(self.client, structure, rows, existing_full_by_content)
 
             # walidacja "na sucho" -- sprawdź, czy da się zbudować atrybuty (bez wysyłki),
             # żeby pokazać ewentualne błędy w podglądzie zamiast dopiero przy wysyłce.
@@ -1057,11 +1136,13 @@ class App(ttkb.Window):
 
             self.after(0, lambda: self._render_preview(
                 structure, existing_by_content, len(existing),
-                resident_to_create, employee_to_create, skipped, errors, fuzzy_notes))
+                resident_to_create, employee_to_create, skipped, errors, fuzzy_notes,
+                usluga_warnings))
         self._bg(_t)
 
     def _render_preview(self, structure, existing_by_content, existing_count,
-                        resident_to_create, employee_to_create, skipped, errors, fuzzy_notes=None):
+                        resident_to_create, employee_to_create, skipped, errors, fuzzy_notes=None,
+                        usluga_warnings=None):
         self._structure_elements = structure
         self._existing_by_content = existing_by_content
         self._next_display_order = existing_count
@@ -1081,7 +1162,15 @@ class App(ttkb.Window):
                          f"(kategoria: {row['kategoria_zadania_pracownik']}, usługa: {row['usluga_pracownik']}){link}")
         if skipped:
             lines.append("")
-            lines.append(f"⚠ Pomijam (już istnieją): {', '.join(skipped)}")
+            lines.append(f"⚠ Pomijam (już istnieją): {', '.join(r['zadanie_pracownik'] for r in skipped)}")
+        usluga_warnings = usluga_warnings or []
+        if usluga_warnings:
+            lines.append("")
+            lines.append(f"⚠ UWAGA — {len(usluga_warnings)} pominiętych zadań wskazuje INNĄ usługę niż Excel")
+            lines.append(f"   (pozostałość po wcześniejszym imporcie). NIE podepną się do usługi z Excela —")
+            lines.append(f"   usuń stare pozycje (usun_ze_slownika, słownik {ZADANIA_DICTIONARY_ID}) i zaimportuj ponownie:")
+            for w in usluga_warnings:
+                lines.append(f"   ⚠ {w}")
         fuzzy_notes = sorted(set(fuzzy_notes or []))
         if fuzzy_notes:
             lines.append("")
