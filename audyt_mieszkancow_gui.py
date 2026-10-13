@@ -168,6 +168,10 @@ AUDIT_TIMEOUT        = 60
 AUDIT_TIMEOUT_RETRY  = 120
 PAGE_SIZE_DEFAULT    = 100
 MAX_PAGES_DEFAULT    = 50
+# Audyt bywa ciężki — mniejsza strona odpowiada w limicie czasu (duże strony
+# na :5000 timeout-owały). Mniejsza strona => więcej stron, więc wyższy limit.
+AUDIT_PAGE_SIZE      = 25
+AUDIT_MAX_PAGES      = 400
 CHANGE_TYPE_LABELS   = {1: "Dodano", 2: "Zmieniono"}
 
 
@@ -313,7 +317,7 @@ def fetch_active_beneficiaries(client, org_id, status_list="1"):
 
 
 def fetch_beneficiary_audit(client, beneficiary_id, date_from=None,
-                             page_size=PAGE_SIZE_DEFAULT, max_pages=MAX_PAGES_DEFAULT):
+                             page_size=AUDIT_PAGE_SIZE, max_pages=AUDIT_MAX_PAGES):
     url = f"{client.servers['employee']}/api/audit/beneficiary/{beneficiary_id}/paged"
     page, all_events = 1, []
     while page <= max_pages:
@@ -423,7 +427,7 @@ def fetch_deleted_employees(client, org_id):
 
 
 def fetch_employee_audit(client, employee_id, date_from=None,
-                         page_size=PAGE_SIZE_DEFAULT, max_pages=MAX_PAGES_DEFAULT):
+                         page_size=AUDIT_PAGE_SIZE, max_pages=AUDIT_MAX_PAGES):
     """POTWIERDZONE przechwyconym ruchem: GET :5000/api/audit/employee/{id}/paged
     -- dokładny odpowiednik fetch_beneficiary_audit."""
     url = f"{client.servers['employee']}/api/audit/employee/{employee_id}/paged"
@@ -1298,25 +1302,37 @@ class App(tk.Tk):
 
         def _t():
             all_rows, residents_summary = [], []
+            errors = 0
             for i, res in enumerate(selected, 1):
                 rid = res.get("id")
                 rname = _resident_label(res)
                 self.after(0, lambda i=i, rname=rname: self._lbl_progress.config(
                     text=f"{i}/{len(selected)}  {rname}"))
-                events = fetch_beneficiary_audit(self.client, rid, date_from=date_from)
-                rows = flatten_audit_tree(events, rid, rname, org_id_str)
-                rows = filter_rows_by_date_to(rows, date_to)
-                all_rows.extend(rows)
-                last_change = max((ev.get("changeTime") or "" for ev in events), default="")
-                residents_summary.append({"residentId": rid, "residentName": rname,
-                                          "eventCount": len(events), "changeCount": len(rows),
-                                          "lastChange": last_change})
+                # błąd jednego mieszkańca nie może wywrócić całego przebiegu
+                try:
+                    events = fetch_beneficiary_audit(self.client, rid, date_from=date_from)
+                    rows = flatten_audit_tree(events, rid, rname, org_id_str)
+                    rows = filter_rows_by_date_to(rows, date_to)
+                    all_rows.extend(rows)
+                    last_change = max((ev.get("changeTime") or "" for ev in events), default="")
+                    residents_summary.append({"residentId": rid, "residentName": rname,
+                                              "eventCount": len(events), "changeCount": len(rows),
+                                              "lastChange": last_change})
+                except Exception as e:
+                    errors += 1
+                    logging.exception(f"Audyt mieszkańca {rid} ({rname}) — pominięto: {e}")
+                    residents_summary.append({"residentId": rid, "residentName": rname,
+                                              "eventCount": 0, "changeCount": 0, "lastChange": "BŁĄD"})
+                    self.after(0, lambda rname=rname, e=e: self._log_msg(
+                        f"Pominięto {rname}: {e}", "err"))
                 self.after(0, lambda i=i: self._progress.configure(value=i))
 
+            # zapis ZAWSZE — nawet przy części błędów (to, co udało się pobrać)
             try:
                 save_excel(out_path, all_rows, residents_summary)
-                msg = f"Zapisano {out_path}  ({len(all_rows)} zmian, {len(selected)} mieszkańców)"
-                self.after(0, lambda: self._log_msg(msg, "ok"))
+                extra = f", {errors} pominięto (błąd/timeout)" if errors else ""
+                msg = f"Zapisano {out_path}  ({len(all_rows)} zmian, {len(selected)} mieszkańców{extra})"
+                self.after(0, lambda: self._log_msg(msg, "ok" if not errors else "err"))
                 self.after(0, lambda: messagebox.showinfo("Gotowe", msg))
             except Exception as e:
                 err_msg = str(e)
@@ -1347,27 +1363,37 @@ class App(tk.Tk):
 
         def _t():
             all_rows, employees_summary = [], []
+            errors = 0
             for i, emp in enumerate(selected, 1):
                 eid = emp.get("id")
                 ename = _employee_label(emp)
                 self.after(0, lambda i=i, ename=ename: self._lbl_emp_progress.config(
                     text=f"{i}/{len(selected)}  {ename}"))
-                events = fetch_employee_audit(self.client, eid, date_from=date_from)
-                rows = flatten_audit_tree(events, eid, ename, org_id_str)
-                rows = filter_rows_by_date_to(rows, date_to)
-                all_rows.extend(rows)
-                last_change = max((ev.get("changeTime") or "" for ev in events), default="")
-                employees_summary.append({"residentId": eid, "residentName": ename,
-                                          "eventCount": len(events), "changeCount": len(rows),
-                                          "lastChange": last_change})
+                try:
+                    events = fetch_employee_audit(self.client, eid, date_from=date_from)
+                    rows = flatten_audit_tree(events, eid, ename, org_id_str)
+                    rows = filter_rows_by_date_to(rows, date_to)
+                    all_rows.extend(rows)
+                    last_change = max((ev.get("changeTime") or "" for ev in events), default="")
+                    employees_summary.append({"residentId": eid, "residentName": ename,
+                                              "eventCount": len(events), "changeCount": len(rows),
+                                              "lastChange": last_change})
+                except Exception as e:
+                    errors += 1
+                    logging.exception(f"Audyt pracownika {eid} ({ename}) — pominięto: {e}")
+                    employees_summary.append({"residentId": eid, "residentName": ename,
+                                              "eventCount": 0, "changeCount": 0, "lastChange": "BŁĄD"})
+                    self.after(0, lambda ename=ename, e=e: self._log_msg(
+                        f"Pominięto {ename}: {e}", "err"))
                 self.after(0, lambda i=i: self._emp_progress.configure(value=i))
 
             try:
                 save_excel(out_path, all_rows, employees_summary, subject_label="Pracownik",
                           subject_id_label="ID pracownika", title_prefix="Audyt zmian pracowników",
                           sheet2_title="Podsumowanie pracowników")
-                msg = f"Zapisano {out_path}  ({len(all_rows)} zmian, {len(selected)} pracowników)"
-                self.after(0, lambda: self._log_msg(msg, "ok"))
+                extra = f", {errors} pominięto (błąd/timeout)" if errors else ""
+                msg = f"Zapisano {out_path}  ({len(all_rows)} zmian, {len(selected)} pracowników{extra})"
+                self.after(0, lambda: self._log_msg(msg, "ok" if not errors else "err"))
                 self.after(0, lambda: messagebox.showinfo("Gotowe", msg))
             except Exception as e:
                 err_msg = str(e)
