@@ -8,7 +8,7 @@ produkcji). Ten sam mechanizm co dodaj_uslugi_pracownikow.py (wersja CLI)
 — patrz tam po szczegóły przepływu API i kształtu payloadu
 POST :5000/api/dictionary-value.
 
-Na razie obsługuje TYLKO usługi pracowników (Typ usługi = "Dla pracownika").
+Obsługuje usługi pracowników i mieszkańców (przełącznik "Dla kogo").
 
 BEZPIECZEŃSTWO: to skrypt PISZĄCY do systemu. "Pokaż podgląd" nic nie
 wysyła. Wysyłka wymaga jawnego potwierdzenia w oknie dialogowym z
@@ -145,9 +145,16 @@ DEFAULT_SHEET = "Arkusz1"
 DEFAULT_TYP_USLUGI = "Dla pracownika"
 DEFAULT_POCHODZENIE = "Wewnętrzna"
 
-COL_USLUGA_HEADER = "Usługa pracownik"
 COL_KATEGORIA_PREFIX = "Kategoria usługi("
-COL_KATEGORIA_SUFFIX = "(pracownik)"
+
+# Konfiguracja per strona (pracownik / mieszkaniec) — różnią się tylko
+# nagłówkami kolumn i domyślnym "Typ usługi".
+SERVICE_SIDES = {
+    "pracownik":  {"label": "Pracownik",  "usluga_header": "Usługa pracownik",
+                   "kat_suffix": "(pracownik)",  "typ_uslugi": "Dla pracownika"},
+    "mieszkaniec": {"label": "Mieszkaniec", "usluga_header": "Usługa mieszkaniec",
+                    "kat_suffix": "(mieszkaniec)", "typ_uslugi": "Dla mieszkańca"},
+}
 
 
 class Client:
@@ -348,7 +355,7 @@ def find_header_column(ws, header_row, predicate):
     return None
 
 
-def read_employee_services_from_excel(xlsx_path, sheet_name):
+def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix):
     """GUI-owa wersja: zwraca (lista_usług, błąd) zamiast przerywać program."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if sheet_name not in wb.sheetnames:
@@ -356,13 +363,14 @@ def read_employee_services_from_excel(xlsx_path, sheet_name):
     ws = wb[sheet_name]
     merge_map = _build_merge_map(ws)
 
-    col_usluga = find_header_column(ws, 1, lambda h: h.strip() == COL_USLUGA_HEADER)
+    col_usluga = find_header_column(ws, 1, lambda h: h.strip() == usluga_header)
     if col_usluga is None:
-        return None, f"Nie znaleziono kolumny '{COL_USLUGA_HEADER}' w wierszu nagłówka arkusza '{ws.title}'."
+        return None, f"Nie znaleziono kolumny '{usluga_header}' w wierszu nagłówka arkusza '{ws.title}'."
     col_kategoria = find_header_column(
-        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(COL_KATEGORIA_SUFFIX))
+        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(kat_suffix))
     if col_kategoria is None:
-        return None, f"Nie znaleziono kolumny kategorii usługi (pracownik) w wierszu nagłówka arkusza '{ws.title}'."
+        return None, (f"Nie znaleziono kolumny kategorii usługi '{kat_suffix}' w wierszu "
+                      f"nagłówka arkusza '{ws.title}'.")
 
     seen = {}
     order = []
@@ -497,10 +505,19 @@ class App(ttkb.Window):
 
         sec_params = ttkb.Labelframe(outer, text=" Parametry usług ", bootstyle=ACCENT_STYLE, padding=10)
         sec_params.pack(fill="x", pady=(0, 8))
+
+        pr0 = ttkb.Frame(sec_params); pr0.pack(fill="x", pady=(0, 6))
+        ttkb.Label(pr0, text="Dla kogo:", font=FONT_SMALL).pack(side="left")
+        self._strona_var = tk.StringVar(value="pracownik")
+        for key in ("pracownik", "mieszkaniec"):
+            ttkb.Radiobutton(pr0, text=SERVICE_SIDES[key]["label"], value=key,
+                             variable=self._strona_var, bootstyle=f"{ACCENT_STYLE}-toolbutton",
+                             command=self._on_strona_change, padding=(10, 3)).pack(side="left", padx=(6, 0))
+
         pr = ttkb.Frame(sec_params); pr.pack(fill="x")
         ttkb.Label(pr, text="Typ usługi (wszystkie):", font=FONT_SMALL).pack(side="left")
         self._e_typ = ttkb.Entry(pr, width=18, font=FONT_SMALL)
-        self._e_typ.insert(0, DEFAULT_TYP_USLUGI)
+        self._e_typ.insert(0, SERVICE_SIDES["pracownik"]["typ_uslugi"])
         self._e_typ.pack(side="left", padx=(4, 14))
         ttkb.Label(pr, text="Pochodzenie usługi (wszystkie):", font=FONT_SMALL).pack(side="left")
         self._e_pochodzenie = ttkb.Entry(pr, width=14, font=FONT_SMALL)
@@ -542,6 +559,16 @@ class App(ttkb.Window):
         logging.info(msg)
 
     def _bg(self, fn): return threading.Thread(target=fn, daemon=True).start()
+
+    def _on_strona_change(self):
+        """Przełączenie pracownik/mieszkaniec: ustaw domyślny Typ usługi i wymuś
+        ponowny podgląd (kolumny Excela się zmieniają)."""
+        side = SERVICE_SIDES[self._strona_var.get()]
+        self._e_typ.delete(0, "end")
+        self._e_typ.insert(0, side["typ_uslugi"])
+        self._pending_services = []
+        self._btn_send.config(state="disabled")
+        self._log_msg(f"Zmieniono stronę na: {side['label']} — kliknij „Pokaż podgląd”.", "inf")
 
     def _set_preview_text(self, text):
         self._preview_text.configure(state="normal")
@@ -614,8 +641,11 @@ class App(ttkb.Window):
         self._btn_send.config(state="disabled")
         self._set_preview_text("Wczytywanie Excela i słowników...")
 
+        side = SERVICE_SIDES[self._strona_var.get()]
+
         def _t():
-            services, err = read_employee_services_from_excel(self._xlsx_path, sheet)
+            services, err = read_services_from_excel(
+                self._xlsx_path, sheet, side["usluga_header"], side["kat_suffix"])
             if err:
                 self.after(0, lambda: messagebox.showerror("Excel", err))
                 self.after(0, lambda: self._set_preview_text(f"Błąd: {err}"))

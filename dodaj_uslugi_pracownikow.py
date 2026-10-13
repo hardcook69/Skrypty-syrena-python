@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Wprowadzanie usług pracowników (słownik 51 — "Usługi") z pliku Excel.
+Wprowadzanie usług (słownik 51 — "Usługi") z pliku Excel.
 
-Na razie obsługuje TYLKO usługi pracowników (Typ usługi = "Dla pracownika").
-Usługi mieszkańców — do zrobienia później, jeśli będzie potrzebne.
+Obsługuje dwie strony (--strona):
+  - pracownik  (Typ usługi = "Dla pracownika")  — kolumny "Usługa pracownik"
+                 i "Kategoria usługi(...)(pracownik)"
+  - mieszkaniec (Typ usługi = "Dla mieszkańca") — kolumny "Usługa mieszkaniec"
+                 i "Kategoria usługi(...)(mieszkaniec)"
+Domyślnie --strona pracownik (zgodność ze starszym użyciem).
 
 Przepływ (dokładnie taki jak w przechwyconym ruchu przeglądarki, "Dodawanie
 usługi"):
@@ -88,14 +92,28 @@ DEFAULT_SHEET = "Arkusz1"
 DEFAULT_TYP_USLUGI = "Dla pracownika"
 DEFAULT_POCHODZENIE = "Wewnętrzna"
 
-# Nagłówek kolumny z nazwą usługi — dopasowanie dokładne (po obcięciu białych znaków).
-COL_USLUGA_HEADER = "Usługa pracownik"
 # Nagłówek kolumny z kategorią usługi jest wieloliniowy (instrukcja wyboru
 # wewnątrz nawiasu) — dopasowanie po początku i końcu, nie całości.
 COL_KATEGORIA_PREFIX = "Kategoria usługi("
-COL_KATEGORIA_SUFFIX = "(pracownik)"
 
-logger = logging.getLogger("dodaj_uslugi_pracownikow")
+# Konfiguracja per strona (pracownik / mieszkaniec). Kolumny i domyślny
+# "Typ usługi" różnią się tylko sufiksem; reszta przepływu jest identyczna.
+SERVICE_SIDES = {
+    "pracownik": {
+        "label": "pracowników",
+        "usluga_header": "Usługa pracownik",
+        "kat_suffix": "(pracownik)",
+        "typ_uslugi": "Dla pracownika",
+    },
+    "mieszkaniec": {
+        "label": "mieszkańców",
+        "usluga_header": "Usługa mieszkaniec",
+        "kat_suffix": "(mieszkaniec)",
+        "typ_uslugi": "Dla mieszkańca",
+    },
+}
+
+logger = logging.getLogger("dodaj_uslugi")
 
 
 class Client:
@@ -303,7 +321,7 @@ def find_header_column(ws, header_row, predicate, label):
     raise SystemExit(f"✗ Nie znaleziono kolumny '{label}' w wierszu nagłówka arkusza '{ws.title}'.")
 
 
-def read_employee_services_from_excel(xlsx_path, sheet_name):
+def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix):
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if sheet_name not in wb.sheetnames:
         raise SystemExit(f"✗ Arkusz '{sheet_name}' nie istnieje w {xlsx_path}. Dostępne: {wb.sheetnames}")
@@ -311,10 +329,10 @@ def read_employee_services_from_excel(xlsx_path, sheet_name):
     merge_map = _build_merge_map(ws)
 
     col_usluga = find_header_column(
-        ws, 1, lambda h: h.strip() == COL_USLUGA_HEADER, COL_USLUGA_HEADER)
+        ws, 1, lambda h: h.strip() == usluga_header, usluga_header)
     col_kategoria = find_header_column(
-        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(COL_KATEGORIA_SUFFIX),
-        "Kategoria usługi (pracownik)")
+        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(kat_suffix),
+        f"Kategoria usługi {kat_suffix}")
 
     seen = {}   # content_norm -> (content, kategoria, pierwszy_wiersz)
     order = []
@@ -350,8 +368,11 @@ def parse_args():
     p.add_argument("--org-id", type=int, default=1)
     p.add_argument("--xlsx", required=True, help="Ścieżka do pliku Excel.")
     p.add_argument("--sheet", default=DEFAULT_SHEET, help=f"Nazwa arkusza (domyślnie '{DEFAULT_SHEET}').")
-    p.add_argument("--typ-uslugi", default=DEFAULT_TYP_USLUGI,
-                    help=f"Wartość pola 'Typ usługi' dla wszystkich wpisów (domyślnie '{DEFAULT_TYP_USLUGI}').")
+    p.add_argument("--strona", choices=["pracownik", "mieszkaniec"], default="pracownik",
+                    help="Dla kogo usługi: 'pracownik' (domyślnie) albo 'mieszkaniec'.")
+    p.add_argument("--typ-uslugi", default=None,
+                    help="Wartość pola 'Typ usługi' dla wszystkich wpisów. Domyślnie zależna od "
+                         "--strona ('Dla pracownika' / 'Dla mieszkańca').")
     p.add_argument("--pochodzenie", default=DEFAULT_POCHODZENIE,
                     help=f"Wartość pola 'Pochodzenie usługi' dla wszystkich wpisów (domyślnie '{DEFAULT_POCHODZENIE}').")
     p.add_argument("--execute", action="store_true", help="Bez tego flaga: tylko podgląd (dry-run), nic nie wysyła.")
@@ -370,16 +391,20 @@ def main():
 
     host = ENVS[args.env]
     client = Client(host)
+    side = SERVICE_SIDES[args.strona]
+    typ_uslugi = args.typ_uslugi or side["typ_uslugi"]
 
     print("=" * 60)
-    print("  Wprowadzanie usług pracowników (słownik 51) — API SYRENA")
+    print(f"  Wprowadzanie usług {side['label']} (słownik 51) — API SYRENA")
     print(f"  Środowisko: {args.env} ({host})  |  organizationId={args.org_id}")
+    print(f"  Strona: {args.strona}  |  Typ usługi: {typ_uslugi}")
     print(f"  Excel: {args.xlsx}  |  arkusz: {args.sheet}")
     if not args.execute:
         print("  TRYB: DRY-RUN (nic nie zostanie wysłane — dodaj --execute)")
     print("=" * 60)
 
-    services_from_excel = read_employee_services_from_excel(args.xlsx, args.sheet)
+    services_from_excel = read_services_from_excel(
+        args.xlsx, args.sheet, side["usluga_header"], side["kat_suffix"])
     if not services_from_excel:
         print("Brak usług do wprowadzenia w tym arkuszu — kończę."); sys.exit(0)
     print(f"\n→ znaleziono {len(services_from_excel)} unikalnych usług w Excelu:")
@@ -418,7 +443,7 @@ def main():
         print("\nWszystkie usługi z Excela już istnieją — nic do zrobienia."); sys.exit(0)
 
     print(f"\n{'='*60}\nPODGLĄD: {len(to_create)} nowych usług do utworzenia")
-    print(f"  Typ usługi (wszystkie): {args.typ_uslugi}")
+    print(f"  Typ usługi (wszystkie): {typ_uslugi}")
     print(f"  Pochodzenie usługi (wszystkie): {args.pochodzenie}")
     print(f"{'='*60}")
     for content, kategoria, row in to_create:
@@ -438,7 +463,7 @@ def main():
         try:
             value_attributes = resolve_value_attributes(
                 client, structure_elements, kategoria,
-                args.typ_uslugi, args.pochodzenie, dict_value_cache)
+                typ_uslugi, args.pochodzenie, dict_value_cache)
         except SystemExit as e:
             logger.error(f"[{i}/{len(to_create)}] ✗ {content} — {e}")
             fail += 1
