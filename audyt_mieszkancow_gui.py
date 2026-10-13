@@ -178,22 +178,61 @@ class Client:
         self.s.headers.update({"Content-Type": "application/json", "Accept": "application/json"})
         self._creds = None
         self._current_org_id = None
+        self._login_org = None
 
-    def login(self, username, password):
+    def login(self, username, password, org_id=None):
+        """Logowanie dwuetapowe (najpierw login, potem organizacja).
+
+        Konta techniczne / wieloorganizacyjne często dostają token dopiero po
+        wyborze organizacji — pierwsze wywołanie zwraca HTTP 200 BEZ tokenu, a
+        uwierzytelnienie trzyma sesja (cookie). Dlatego akceptujemy każde 200:
+        token (jeśli jest) ustawiamy od razu, a jeśli go nie ma — realny token
+        pobierze select_organization(). Gdy to nie wyjdzie, próbujemy jeszcze z
+        organizationId już w pierwszym wywołaniu."""
+        url = f"{self.servers['auth']}/api/authentication/token"
+        if self._try_login(url, username, password, None):
+            return True
+        if org_id is not None:
+            logging.info("Zwykłe logowanie nieudane — próba z organizationId w pierwszym "
+                         "wywołaniu (konto techniczne / wieloorganizacyjne).")
+            return self._try_login(url, username, password, org_id)
+        return False
+
+    def _try_login(self, url, username, password, org_id):
         for key in ("login", "userName", "username"):
+            payload = {key: username, "password": password}
+            if org_id is not None:
+                payload["organizationId"] = org_id
             try:
-                r = self.s.post(f"{self.servers['auth']}/api/authentication/token",
-                                 json={key: username, "password": password}, timeout=TIMEOUT)
-                if r.status_code == 200:
-                    d = r.json()
-                    tok = d.get("token") or d.get("access_token")
-                    if tok:
-                        self.s.headers["Authorization"] = f"Bearer {tok}"
-                        self._creds = (username, password)
-                        logging.info(f"Zalogowano: {d.get('userName')}")
-                        return True
+                r = self.s.post(url, json=payload, timeout=TIMEOUT)
             except Exception as e:
-                logging.error(f"Błąd logowania (klucz={key}): {e}")
+                logging.error(f"Błąd logowania (klucz={key}, org={org_id}): {e}")
+                continue
+            if r.status_code == 200:
+                try:
+                    d = r.json()
+                except Exception:
+                    d = {}
+                tok = d.get("token") or d.get("access_token")
+                if tok:
+                    self.s.headers["Authorization"] = f"Bearer {tok}"
+                else:
+                    # 200 bez tokenu: token wyda dopiero wybór organizacji
+                    self.s.headers.pop("Authorization", None)
+                    logging.info(f"Logowanie 200 bez tokenu (klucz={key}, org={org_id}) — "
+                                 f"token po wyborze organizacji. Pola odpowiedzi: {list(d.keys())}")
+                self._creds = (username, password)
+                self._login_org = org_id
+                logging.info(f"Zalogowano: {d.get('userName') or username} "
+                             f"(klucz={key}, org={org_id}, token={'tak' if tok else 'nie'})")
+                return True
+            # diagnostyka: dlaczego serwer odrzucił
+            body = ""
+            try:
+                body = r.text[:200].replace("\n", " ")
+            except Exception:
+                pass
+            logging.warning(f"Logowanie odrzucone (klucz={key}, org={org_id}): HTTP {r.status_code} {body}")
         return False
 
     def select_organization(self, org_id):
@@ -204,7 +243,12 @@ class Client:
             logging.error(f"Błąd przełączania organizacji org_id={org_id}: {e}")
             return False
         if r.status_code != 200:
-            logging.error(f"Przełączenie na organizationId={org_id} nieudane: HTTP {r.status_code}")
+            body = ""
+            try:
+                body = r.text[:200].replace("\n", " ")
+            except Exception:
+                pass
+            logging.error(f"Przełączenie na organizationId={org_id} nieudane: HTTP {r.status_code} {body}")
             return False
         try:
             d = r.json()
@@ -214,7 +258,7 @@ class Client:
         if tok:
             self.s.headers["Authorization"] = f"Bearer {tok}"
         self._current_org_id = org_id
-        logging.info(f"Przełączono na organizationId={org_id}")
+        logging.info(f"Przełączono na organizationId={org_id} (token={'tak' if tok else 'nie'})")
         return True
 
     def _get(self, url, params=None, _retry=True, timeout=None):
@@ -230,7 +274,7 @@ class Client:
             return None, str(e)
         if r.status_code == 401 and _retry and self._creds:
             logging.warning("Token wygasł (401) — ponowne logowanie")
-            if self.login(*self._creds):
+            if self.login(self._creds[0], self._creds[1], self._current_org_id):
                 if self._current_org_id is not None:
                     self.select_organization(self._current_org_id)
                 return self._get(url, params=params, _retry=False, timeout=timeout)
@@ -1162,7 +1206,7 @@ class App(tk.Tk):
         self._lbl_auth.config(text="Logowanie...", fg="#888")
 
         def _t():
-            ok = self.client.login(user, pw)
+            ok = self.client.login(user, pw, org_id)
             if not ok:
                 self.after(0, lambda: self._lbl_auth.config(text="Błąd logowania", fg=DANGER_CLR))
                 self.after(0, lambda: self._log_msg("Błąd logowania — sprawdź login/hasło", "err"))
