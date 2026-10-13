@@ -286,21 +286,28 @@ def find_header_column_optional(ws, header_row, predicate):
 
 
 def extract_task_names_from_excel(xlsx_path):
-    """Zbiera wszystkie wartości z kolumn 'Zadanie pracownik' i 'Zadanie
-    mieszkaniec' ze WSZYSTKICH arkuszy pliku -- pomija po cichu arkusze,
-    które nie mają żadnej z tych kolumn (np. inny typ pliku). Zwraca zbiór
-    tekstów znormalizowanych (strip + lower) do porównania z 'content' w
-    słowniku."""
+    """Zbiera wszystkie wartości z kolumn 'Zadanie pracownik'/'Zadanie
+    mieszkaniec' (nazwy w słowniku 53) ORAZ 'Usługa pracownik'/'Usługa
+    mieszkaniec' (nazwy w słowniku 51) ze WSZYSTKICH arkuszy pliku -- pomija
+    po cichu arkusze, które nie mają żadnej z tych czterech kolumn (np. inny
+    typ pliku). Zwraca jeden zbiór tekstów znormalizowanych (strip + lower)
+    do porównania z 'content' we wczytanym słowniku -- nazwy "nie z tego
+    słownika" po prostu się nie dopasują, więc ten sam przycisk działa i dla
+    zadań (słownik 53), i dla usług (słownik 51)."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     names = set()
     for ws in wb.worksheets:
-        col_p = find_header_column_optional(ws, 1, lambda h: h.strip() == "Zadanie pracownik")
-        col_m = find_header_column_optional(ws, 1, lambda h: h.strip() == "Zadanie mieszkaniec")
-        if col_p is None and col_m is None:
+        cols = [
+            find_header_column_optional(ws, 1, lambda h: h.strip() == "Zadanie pracownik"),
+            find_header_column_optional(ws, 1, lambda h: h.strip() == "Zadanie mieszkaniec"),
+            find_header_column_optional(ws, 1, lambda h: h.strip() == "Usługa pracownik"),
+            find_header_column_optional(ws, 1, lambda h: h.strip() == "Usługa mieszkaniec"),
+        ]
+        if all(c is None for c in cols):
             continue
         merge_map = _build_merge_map(ws)
         for r in range(2, ws.max_row + 1):
-            for col in (col_p, col_m):
+            for col in cols:
                 if col is None:
                     continue
                 v = _cell_value(ws, merge_map, r, col)
@@ -664,7 +671,8 @@ class App(ttkb.Window):
     def _apply_excel_selection(self, names, path):
         if not names:
             messagebox.showwarning("Zaznacz z Excela",
-                "Nie znaleziono w tym pliku kolumny 'Zadanie pracownik' ani 'Zadanie mieszkaniec' "
+                "Nie znaleziono w tym pliku żadnej z kolumn: 'Zadanie pracownik', "
+                "'Zadanie mieszkaniec', 'Usługa pracownik', 'Usługa mieszkaniec' "
                 "(albo są puste) -- to nie jest plik w formacie dodaj_rodzaje_zadan_gui.py?")
             return
         matched = 0
@@ -675,27 +683,33 @@ class App(ttkb.Window):
                 self._checked_value_ids.add(v.get("id"))
         self._refresh_tree(self._filtered_sorted_items())
 
-        # Nazwy z Excela (kolumny "Zadanie pracownik"/"Zadanie mieszkaniec") to
-        # pozycje słownika 53 (Rodzaje zadań). Najczęstszy błąd: użytkownik ma
-        # wczytany słownik 51 (Usługi, domyślny) i dostaje 0 dopasowań. Gdy nic
-        # się nie zaznaczyło, podpowiadamy to wprost (komunikat + okno).
+        # Z Excela zbieramy nazwy ZADAŃ (słownik 53) i USŁUG (słownik 51).
+        # Dopasowują się tylko te pasujące do AKTUALNIE wczytanego słownika.
+        # Najczęstszy błąd: wczytany niewłaściwy słownik -> 0 dopasowań. Gdy nic
+        # się nie zaznaczyło, podpowiadamy, który słownik wczytać (komunikat+okno).
         loaded = getattr(self, "_loaded_dict_id", None)
         if matched == 0:
-            hint = ("Zaznaczono 0 pozycji. Nazwy zadań z Excela są w słowniku "
-                    "53 (Rodzaje zadań). ")
-            if loaded is not None and loaded != 53:
-                hint += (f"Masz wczytany słownik {loaded}. Zmień ID słownika na 53, "
-                         f"kliknij „Wczytaj pozycje”, a potem ponownie „Zaznacz z Excela”.")
+            hint = ("Zaznaczono 0 pozycji. Nazwy ZADAŃ z Excela są w słowniku 53 "
+                    "(Rodzaje zadań), a nazwy USŁUG w słowniku 51 (Usługi). ")
+            if loaded is not None:
+                other = 53 if loaded == 51 else (51 if loaded == 53 else None)
+                if other is not None:
+                    hint += (f"Masz wczytany słownik {loaded}. Jeśli chcesz usuwać "
+                             f"{'usługi' if loaded == 53 else 'zadania'}, przełącz ID słownika na {other}, "
+                             f"kliknij „Wczytaj pozycje”, a potem ponownie „Zaznacz z Excela”.")
+                else:
+                    hint += (f"Masz wczytany słownik {loaded}. Wczytaj słownik 51 (usługi) "
+                             f"albo 53 (zadania), zależnie od tego, co chcesz usunąć.")
             else:
-                hint += ("Upewnij się, że wczytałeś słownik 53 („Wczytaj pozycje”). "
+                hint += ("Upewnij się, że wczytałeś właściwy słownik („Wczytaj pozycje”). "
                          "Jeśli tak — te pozycje mogły już zostać usunięte.")
-            self._log_msg(f"Excel {os.path.basename(path)}: {len(names)} nazw zadań, {hint}", "err")
+            self._log_msg(f"Excel {os.path.basename(path)}: {len(names)} nazw z Excela, {hint}", "err")
             messagebox.showwarning("Zaznacz z Excela", hint)
             return
 
         unmatched = len(names) - matched
         self._log_msg(
-            f"Excel {os.path.basename(path)}: {len(names)} nazw zadań, zaznaczono {matched} pasujących "
+            f"Excel {os.path.basename(path)}: {len(names)} nazw z Excela, zaznaczono {matched} pasujących "
             f"pozycji w słowniku {loaded if loaded is not None else '(wczytanym)'}"
             + (f" ({unmatched} nazw z Excela nie znaleziono w tym słowniku — może są w innym słowniku "
                f"albo już usunięte)" if unmatched > 0 else ""), "ok")
