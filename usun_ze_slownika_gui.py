@@ -535,6 +535,7 @@ class App(ttkb.Window):
                 self.after(0, lambda: self._log_msg(f"Błąd pobierania słownika {dict_id}: {err}", "err"))
                 return
             items = sorted(items, key=lambda v: (v.get("content") or "").lower())
+            self._loaded_dict_id = dict_id   # zapamiętaj, który słownik jest wczytany
             self.after(0, lambda: self._render_items(items))
             self.after(0, lambda: self._lbl_dict_status.config(text=f"{len(items)} pozycji"))
             self.after(0, lambda: self._log_msg(f"Słownik {dict_id}: pobrano {len(items)} pozycji", "ok"))
@@ -673,10 +674,29 @@ class App(ttkb.Window):
                 matched += 1
                 self._checked_value_ids.add(v.get("id"))
         self._refresh_tree(self._filtered_sorted_items())
+
+        # Nazwy z Excela (kolumny "Zadanie pracownik"/"Zadanie mieszkaniec") to
+        # pozycje słownika 53 (Rodzaje zadań). Najczęstszy błąd: użytkownik ma
+        # wczytany słownik 51 (Usługi, domyślny) i dostaje 0 dopasowań. Gdy nic
+        # się nie zaznaczyło, podpowiadamy to wprost (komunikat + okno).
+        loaded = getattr(self, "_loaded_dict_id", None)
+        if matched == 0:
+            hint = ("Zaznaczono 0 pozycji. Nazwy zadań z Excela są w słowniku "
+                    "53 (Rodzaje zadań). ")
+            if loaded is not None and loaded != 53:
+                hint += (f"Masz wczytany słownik {loaded}. Zmień ID słownika na 53, "
+                         f"kliknij „Wczytaj pozycje”, a potem ponownie „Zaznacz z Excela”.")
+            else:
+                hint += ("Upewnij się, że wczytałeś słownik 53 („Wczytaj pozycje”). "
+                         "Jeśli tak — te pozycje mogły już zostać usunięte.")
+            self._log_msg(f"Excel {os.path.basename(path)}: {len(names)} nazw zadań, {hint}", "err")
+            messagebox.showwarning("Zaznacz z Excela", hint)
+            return
+
         unmatched = len(names) - matched
         self._log_msg(
             f"Excel {os.path.basename(path)}: {len(names)} nazw zadań, zaznaczono {matched} pasujących "
-            f"pozycji w aktualnie wczytanym słowniku"
+            f"pozycji w słowniku {loaded if loaded is not None else '(wczytanym)'}"
             + (f" ({unmatched} nazw z Excela nie znaleziono w tym słowniku — może są w innym słowniku "
                f"albo już usunięte)" if unmatched > 0 else ""), "ok")
 
