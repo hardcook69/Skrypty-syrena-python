@@ -92,23 +92,37 @@ DEFAULT_SHEET = "Arkusz1"
 DEFAULT_TYP_USLUGI = "Dla pracownika"
 DEFAULT_POCHODZENIE = "Wewnętrzna"
 
-# Nagłówek kolumny z kategorią usługi jest wieloliniowy (instrukcja wyboru
-# wewnątrz nawiasu) — dopasowanie po początku i końcu, nie całości.
-COL_KATEGORIA_PREFIX = "Kategoria usługi("
+# Kolumnę "Kategoria usługi..." rozpoznajemy po TREŚCI nagłówka, nie po sztywnym
+# sufiksie — bo w praktyce bywa i "Kategoria usługi(...)(pracownik)", i
+# "Kategoria usługi mieszkańca(...)". Reguła: nagłówek zaczyna się od
+# "kategoria usługi" i zawiera marker strony; strona pracownik dodatkowo NIE
+# może zawierać "mieszka" (żeby nie złapać kolumny mieszkańca, która też bywa
+# zakończona "(pracownik)").
+def kategoria_col_predicate(kat_include, kat_exclude):
+    def _p(h):
+        low = h.strip().lower()
+        if not low.startswith("kategoria usługi"):
+            return False
+        if kat_include not in low:
+            return False
+        if kat_exclude and kat_exclude in low:
+            return False
+        return True
+    return _p
 
 # Konfiguracja per strona (pracownik / mieszkaniec). Kolumny i domyślny
-# "Typ usługi" różnią się tylko sufiksem; reszta przepływu jest identyczna.
+# "Typ usługi" różnią się tylko markerem; reszta przepływu jest identyczna.
 SERVICE_SIDES = {
     "pracownik": {
         "label": "pracowników",
         "usluga_header": "Usługa pracownik",
-        "kat_suffix": "(pracownik)",
+        "kat_include": "pracownik", "kat_exclude": "mieszka",
         "typ_uslugi": "Dla pracownika",
     },
     "mieszkaniec": {
         "label": "mieszkańców",
         "usluga_header": "Usługa mieszkaniec",
-        "kat_suffix": "(mieszkaniec)",
+        "kat_include": "mieszka", "kat_exclude": None,
         "typ_uslugi": "Dla mieszkańca",
     },
 }
@@ -329,11 +343,11 @@ def find_header_column_optional(ws, header_row, predicate):
     return None
 
 
-def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix,
+def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_predicate,
                              default_kategoria=None):
-    """Kolumna 'Kategoria usługi(...)(<strona>)' jest opcjonalna: gdy jej nie ma,
-    dla wszystkich usług użyta zostanie `default_kategoria` (np. z --kategoria-uslugi).
-    Gdy nie ma ani kolumny, ani wartości domyślnej — czytelny błąd."""
+    """Kolumna 'Kategoria usługi...' jest opcjonalna: gdy jej nie ma, dla wszystkich
+    usług użyta zostanie `default_kategoria` (np. z --kategoria-uslugi). Gdy nie ma
+    ani kolumny, ani wartości domyślnej — czytelny błąd."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if sheet_name not in wb.sheetnames:
         raise SystemExit(f"✗ Arkusz '{sheet_name}' nie istnieje w {xlsx_path}. Dostępne: {wb.sheetnames}")
@@ -342,11 +356,10 @@ def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix,
 
     col_usluga = find_header_column(
         ws, 1, lambda h: h.strip() == usluga_header, usluga_header)
-    col_kategoria = find_header_column_optional(
-        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(kat_suffix))
+    col_kategoria = find_header_column_optional(ws, 1, kat_predicate)
     if col_kategoria is None and not default_kategoria:
         raise SystemExit(
-            f"✗ Brak kolumny 'Kategoria usługi {kat_suffix}' w arkuszu '{ws.title}'. "
+            f"✗ Nie znaleziono kolumny 'Kategoria usługi...' dla tej strony w arkuszu '{ws.title}'. "
             f"Dodaj tę kolumnę albo podaj jedną wspólną kategorię przez --kategoria-uslugi.")
 
     seen = {}   # content_norm -> (content, kategoria, pierwszy_wiersz)
@@ -427,8 +440,9 @@ def main():
         print("  TRYB: DRY-RUN (nic nie zostanie wysłane — dodaj --execute)")
     print("=" * 60)
 
+    kat_predicate = kategoria_col_predicate(side["kat_include"], side["kat_exclude"])
     services_from_excel = read_services_from_excel(
-        args.xlsx, args.sheet, side["usluga_header"], side["kat_suffix"],
+        args.xlsx, args.sheet, side["usluga_header"], kat_predicate,
         default_kategoria=args.kategoria_uslugi)
     if not services_from_excel:
         print("Brak usług do wprowadzenia w tym arkuszu — kończę."); sys.exit(0)

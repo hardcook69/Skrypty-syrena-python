@@ -145,15 +145,26 @@ DEFAULT_SHEET = "Arkusz1"
 DEFAULT_TYP_USLUGI = "Dla pracownika"
 DEFAULT_POCHODZENIE = "Wewnętrzna"
 
-COL_KATEGORIA_PREFIX = "Kategoria usługi("
+# Kolumnę "Kategoria usługi..." rozpoznajemy po treści nagłówka (patrz CLI):
+# zaczyna się od "kategoria usługi" i zawiera marker strony; pracownik dodatkowo
+# NIE może zawierać "mieszka".
+def kategoria_col_predicate(kat_include, kat_exclude):
+    def _p(h):
+        low = h.strip().lower()
+        if not low.startswith("kategoria usługi"):
+            return False
+        if kat_include not in low:
+            return False
+        if kat_exclude and kat_exclude in low:
+            return False
+        return True
+    return _p
 
-# Konfiguracja per strona (pracownik / mieszkaniec) — różnią się tylko
-# nagłówkami kolumn i domyślnym "Typ usługi".
 SERVICE_SIDES = {
     "pracownik":  {"label": "Pracownik",  "usluga_header": "Usługa pracownik",
-                   "kat_suffix": "(pracownik)",  "typ_uslugi": "Dla pracownika"},
+                   "kat_include": "pracownik", "kat_exclude": "mieszka", "typ_uslugi": "Dla pracownika"},
     "mieszkaniec": {"label": "Mieszkaniec", "usluga_header": "Usługa mieszkaniec",
-                    "kat_suffix": "(mieszkaniec)", "typ_uslugi": "Dla mieszkańca"},
+                    "kat_include": "mieszka", "kat_exclude": None, "typ_uslugi": "Dla mieszkańca"},
 }
 
 
@@ -355,7 +366,7 @@ def find_header_column(ws, header_row, predicate):
     return None
 
 
-def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix,
+def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_predicate,
                              default_kategoria=None):
     """GUI-owa wersja: zwraca (lista_usług, błąd) zamiast przerywać program.
     Kolumna kategorii jest opcjonalna — gdy jej nie ma, używa default_kategoria."""
@@ -368,11 +379,10 @@ def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix,
     col_usluga = find_header_column(ws, 1, lambda h: h.strip() == usluga_header)
     if col_usluga is None:
         return None, f"Nie znaleziono kolumny '{usluga_header}' w wierszu nagłówka arkusza '{ws.title}'."
-    col_kategoria = find_header_column(
-        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(kat_suffix))
+    col_kategoria = find_header_column(ws, 1, kat_predicate)
     default_kategoria = (default_kategoria or "").strip()
     if col_kategoria is None and not default_kategoria:
-        return None, (f"Nie znaleziono kolumny kategorii usługi '{kat_suffix}' w arkuszu '{ws.title}'. "
+        return None, (f"Nie znaleziono kolumny 'Kategoria usługi...' dla tej strony w arkuszu '{ws.title}'. "
                       f"Dodaj tę kolumnę albo wpisz jedną wspólną kategorię w polu „Kategoria (gdy brak kolumny)”.")
 
     seen = {}
@@ -658,10 +668,11 @@ class App(ttkb.Window):
 
         side = SERVICE_SIDES[self._strona_var.get()]
         default_kat = self._e_kategoria.get().strip()
+        kat_predicate = kategoria_col_predicate(side["kat_include"], side["kat_exclude"])
 
         def _t():
             services, err = read_services_from_excel(
-                self._xlsx_path, sheet, side["usluga_header"], side["kat_suffix"],
+                self._xlsx_path, sheet, side["usluga_header"], kat_predicate,
                 default_kategoria=default_kat)
             if err:
                 self.after(0, lambda: messagebox.showerror("Excel", err))
