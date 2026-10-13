@@ -321,7 +321,19 @@ def find_header_column(ws, header_row, predicate, label):
     raise SystemExit(f"✗ Nie znaleziono kolumny '{label}' w wierszu nagłówka arkusza '{ws.title}'.")
 
 
-def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix):
+def find_header_column_optional(ws, header_row, predicate):
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=header_row, column=col).value
+        if header and predicate(str(header)):
+            return col
+    return None
+
+
+def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix,
+                             default_kategoria=None):
+    """Kolumna 'Kategoria usługi(...)(<strona>)' jest opcjonalna: gdy jej nie ma,
+    dla wszystkich usług użyta zostanie `default_kategoria` (np. z --kategoria-uslugi).
+    Gdy nie ma ani kolumny, ani wartości domyślnej — czytelny błąd."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if sheet_name not in wb.sheetnames:
         raise SystemExit(f"✗ Arkusz '{sheet_name}' nie istnieje w {xlsx_path}. Dostępne: {wb.sheetnames}")
@@ -330,21 +342,30 @@ def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix):
 
     col_usluga = find_header_column(
         ws, 1, lambda h: h.strip() == usluga_header, usluga_header)
-    col_kategoria = find_header_column(
-        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(kat_suffix),
-        f"Kategoria usługi {kat_suffix}")
+    col_kategoria = find_header_column_optional(
+        ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(kat_suffix))
+    if col_kategoria is None and not default_kategoria:
+        raise SystemExit(
+            f"✗ Brak kolumny 'Kategoria usługi {kat_suffix}' w arkuszu '{ws.title}'. "
+            f"Dodaj tę kolumnę albo podaj jedną wspólną kategorię przez --kategoria-uslugi.")
 
     seen = {}   # content_norm -> (content, kategoria, pierwszy_wiersz)
     order = []
     for row in range(2, ws.max_row + 1):
         usluga = _cell_value(ws, merge_map, row, col_usluga)
-        kategoria = _cell_value(ws, merge_map, row, col_kategoria)
         if not usluga or not str(usluga).strip():
             continue
         usluga = str(usluga).strip()
-        kategoria = str(kategoria).strip() if kategoria else ""
+        if col_kategoria is not None:
+            kategoria = _cell_value(ws, merge_map, row, col_kategoria)
+            kategoria = str(kategoria).strip() if kategoria else ""
+        else:
+            kategoria = ""
         if not kategoria:
-            raise SystemExit(f"✗ Wiersz {row}: usługa '{usluga}' nie ma podanej kategorii usługi.")
+            kategoria = (default_kategoria or "").strip()
+        if not kategoria:
+            raise SystemExit(f"✗ Wiersz {row}: usługa '{usluga}' nie ma podanej kategorii usługi "
+                             f"(dodaj kolumnę kategorii albo użyj --kategoria-uslugi).")
         norm = usluga.lower()
         if norm in seen:
             prev_content, prev_kategoria, prev_row = seen[norm]
@@ -373,6 +394,9 @@ def parse_args():
     p.add_argument("--typ-uslugi", default=None,
                     help="Wartość pola 'Typ usługi' dla wszystkich wpisów. Domyślnie zależna od "
                          "--strona ('Dla pracownika' / 'Dla mieszkańca').")
+    p.add_argument("--kategoria-uslugi", default=None,
+                    help="Jedna wspólna 'Kategoria usługi' dla wszystkich wpisów — używana, gdy w "
+                         "arkuszu nie ma kolumny 'Kategoria usługi(...)(<strona>)'.")
     p.add_argument("--pochodzenie", default=DEFAULT_POCHODZENIE,
                     help=f"Wartość pola 'Pochodzenie usługi' dla wszystkich wpisów (domyślnie '{DEFAULT_POCHODZENIE}').")
     p.add_argument("--execute", action="store_true", help="Bez tego flaga: tylko podgląd (dry-run), nic nie wysyła.")
@@ -404,7 +428,8 @@ def main():
     print("=" * 60)
 
     services_from_excel = read_services_from_excel(
-        args.xlsx, args.sheet, side["usluga_header"], side["kat_suffix"])
+        args.xlsx, args.sheet, side["usluga_header"], side["kat_suffix"],
+        default_kategoria=args.kategoria_uslugi)
     if not services_from_excel:
         print("Brak usług do wprowadzenia w tym arkuszu — kończę."); sys.exit(0)
     print(f"\n→ znaleziono {len(services_from_excel)} unikalnych usług w Excelu:")

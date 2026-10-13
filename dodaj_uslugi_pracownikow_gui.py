@@ -355,8 +355,10 @@ def find_header_column(ws, header_row, predicate):
     return None
 
 
-def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix):
-    """GUI-owa wersja: zwraca (lista_usług, błąd) zamiast przerywać program."""
+def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix,
+                             default_kategoria=None):
+    """GUI-owa wersja: zwraca (lista_usług, błąd) zamiast przerywać program.
+    Kolumna kategorii jest opcjonalna — gdy jej nie ma, używa default_kategoria."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if sheet_name not in wb.sheetnames:
         return None, f"Arkusz '{sheet_name}' nie istnieje w pliku. Dostępne: {wb.sheetnames}"
@@ -368,19 +370,25 @@ def read_services_from_excel(xlsx_path, sheet_name, usluga_header, kat_suffix):
         return None, f"Nie znaleziono kolumny '{usluga_header}' w wierszu nagłówka arkusza '{ws.title}'."
     col_kategoria = find_header_column(
         ws, 1, lambda h: h.startswith(COL_KATEGORIA_PREFIX) and h.rstrip().endswith(kat_suffix))
-    if col_kategoria is None:
-        return None, (f"Nie znaleziono kolumny kategorii usługi '{kat_suffix}' w wierszu "
-                      f"nagłówka arkusza '{ws.title}'.")
+    default_kategoria = (default_kategoria or "").strip()
+    if col_kategoria is None and not default_kategoria:
+        return None, (f"Nie znaleziono kolumny kategorii usługi '{kat_suffix}' w arkuszu '{ws.title}'. "
+                      f"Dodaj tę kolumnę albo wpisz jedną wspólną kategorię w polu „Kategoria (gdy brak kolumny)”.")
 
     seen = {}
     order = []
     for row in range(2, ws.max_row + 1):
         usluga = _cell_value(ws, merge_map, row, col_usluga)
-        kategoria = _cell_value(ws, merge_map, row, col_kategoria)
         if not usluga or not str(usluga).strip():
             continue
         usluga = str(usluga).strip()
-        kategoria = str(kategoria).strip() if kategoria else ""
+        if col_kategoria is not None:
+            kategoria = _cell_value(ws, merge_map, row, col_kategoria)
+            kategoria = str(kategoria).strip() if kategoria else ""
+        else:
+            kategoria = ""
+        if not kategoria:
+            kategoria = default_kategoria
         if not kategoria:
             return None, f"Wiersz {row}: usługa '{usluga}' nie ma podanej kategorii usługi."
         norm = usluga.lower()
@@ -523,6 +531,13 @@ class App(ttkb.Window):
         self._e_pochodzenie = ttkb.Entry(pr, width=14, font=FONT_SMALL)
         self._e_pochodzenie.insert(0, DEFAULT_POCHODZENIE)
         self._e_pochodzenie.pack(side="left", padx=4)
+
+        pr2 = ttkb.Frame(sec_params); pr2.pack(fill="x", pady=(6, 0))
+        ttkb.Label(pr2, text="Kategoria (gdy brak kolumny):", font=FONT_SMALL).pack(side="left")
+        self._e_kategoria = ttkb.Entry(pr2, width=18, font=FONT_SMALL)
+        self._e_kategoria.pack(side="left", padx=(4, 10))
+        ttkb.Label(pr2, text="używane tylko, jeśli w arkuszu nie ma kolumny „Kategoria usługi(…)”.",
+                   bootstyle="secondary", font=FONT_TINY).pack(side="left")
         ttkb.Label(sec_params,
                  text="Kategoria usługi jest brana osobno dla każdej usługi — z kolumny w Excelu.",
                  bootstyle="secondary", font=FONT_TINY).pack(anchor="w", pady=(6, 0))
@@ -642,10 +657,12 @@ class App(ttkb.Window):
         self._set_preview_text("Wczytywanie Excela i słowników...")
 
         side = SERVICE_SIDES[self._strona_var.get()]
+        default_kat = self._e_kategoria.get().strip()
 
         def _t():
             services, err = read_services_from_excel(
-                self._xlsx_path, sheet, side["usluga_header"], side["kat_suffix"])
+                self._xlsx_path, sheet, side["usluga_header"], side["kat_suffix"],
+                default_kategoria=default_kat)
             if err:
                 self.after(0, lambda: messagebox.showerror("Excel", err))
                 self.after(0, lambda: self._set_preview_text(f"Błąd: {err}"))
