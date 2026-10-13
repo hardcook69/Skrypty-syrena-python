@@ -60,7 +60,7 @@ ROLE_RE = re.compile(r"<([^>]+)>")
 MED_ROLES = {"OPIEKUN MEDYCZNY", "PIELĘGNIARKA"}
 
 # słowa-klucze czynności opiekuńczych (treść zadania pracownika)
-CARE_KW = ["kąpiel", "toalet", "ubran", "rozebran", "posiłek", "posilek",
+CARE_KW = ["kąpiel", "toalet", "ubran", "rozebran", "posiłk", "posilk",
            "śniadan", "sniadan", "obiad", "kolacj", "karmienie", "dopajanie",
            "naczyń", "naczyn", "pościel", "posciel", "strzyżenie", "strzyzenie",
            "paznokc", "golenie"]
@@ -69,7 +69,7 @@ CARE_KW = ["kąpiel", "toalet", "ubran", "rozebran", "posiłek", "posilek",
 USLUGA_B_RULES = [
     (("kąpiel",), "kąpiel"),
     (("toalet", "ubran", "rozebran"), "Toalety"),
-    (("posiłek", "posilek", "śniadan", "sniadan", "obiad", "kolacj",
+    (("posiłk", "posilk", "śniadan", "sniadan", "obiad", "kolacj",
       "karmienie", "dopajanie", "naczyń", "naczyn"), "Wyżywienie"),
     (("pościel", "posciel"), "Sprzątanie"),
     (("strzyżenie", "strzyzenie", "paznokc", "golenie"), "Toalety"),
