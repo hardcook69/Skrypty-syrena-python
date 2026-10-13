@@ -655,16 +655,22 @@ def find_header_column_optional(ws, header_row, predicate):
     return None
 
 
+def _hdr_eq(h, target):
+    """Dopasowanie nagłówka 'na równość' tolerancyjne na końcowy dwukropek,
+    białe znaki i wielkość liter (np. 'Stanowisko:\\n' == 'Stanowisko')."""
+    return h.strip().rstrip(":").strip().casefold() == target.casefold()
+
+
 COLUMN_SPECS = {
-    "usluga_pracownik":            lambda h: h.strip() == "Usługa pracownik",
+    "usluga_pracownik":            lambda h: _hdr_eq(h, "Usługa pracownik"),
     "kategoria_usluga_pracownik":  lambda h: h.startswith("Kategoria usługi(") and h.rstrip().endswith("(pracownik)"),
-    "zadanie_pracownik":           lambda h: h.strip() == "Zadanie pracownik",
+    "zadanie_pracownik":           lambda h: _hdr_eq(h, "Zadanie pracownik"),
     "kategoria_zadania_pracownik": lambda h: h.startswith("Kategoria zadania(") and h.rstrip().lower().endswith("(pracownik)"),
-    "zadanie_mieszkaniec":         lambda h: h.strip() == "Zadanie mieszkaniec",
+    "zadanie_mieszkaniec":         lambda h: _hdr_eq(h, "Zadanie mieszkaniec"),
     "kategoria_zadania_mieszkaniec": lambda h: h.startswith("Kategoria zadania(") and h.rstrip().lower().endswith("(mieszkaniec)"),
-    "usluga_mieszkaniec":          lambda h: h.strip() == "Usługa mieszkaniec",
-    "czas_realizacji":             lambda h: h.strip() == "Nominalny czas realizacji",
-    "stanowisko":                  lambda h: h.strip() == "Stanowisko",
+    "usluga_mieszkaniec":          lambda h: _hdr_eq(h, "Usługa mieszkaniec"),
+    "czas_realizacji":             lambda h: _hdr_eq(h, "Nominalny czas realizacji"),
+    "stanowisko":                  lambda h: _hdr_eq(h, "Stanowisko"),
     "ilosc_pracownikow":           lambda h: h.startswith("Ilość pracowników"),
     "priorytet":                   lambda h: h.startswith("Piorytet zadania"),
     "kanal":                       lambda h: h.startswith("Kanał komunikacyjny"),
@@ -684,7 +690,7 @@ def read_tasks_from_excel(xlsx_path, sheet_name):
     # Opcjonalna kolumna -- używana tylko jako drugorzędne źródło dopasowania
     # dla pola 'Stanowisko' (patrz find_value_id_by_grupa_zawodowa), starsze
     # pliki Excela mogą jej nie mieć.
-    grupa_zawodowa_col = find_header_column_optional(ws, 1, lambda h: h.strip() == "Grupa zawodowa")
+    grupa_zawodowa_col = find_header_column_optional(ws, 1, lambda h: _hdr_eq(h, "Grupa zawodowa"))
 
     rows = []
     seen_pracownik = set()

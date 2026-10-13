@@ -700,16 +700,22 @@ def find_header_column(ws, header_row, predicate):
     return None
 
 
+def _hdr_eq(h, target):
+    """Dopasowanie nagłówka 'na równość' tolerancyjne na końcowy dwukropek,
+    białe znaki i wielkość liter (np. 'Stanowisko:\\n' == 'Stanowisko')."""
+    return h.strip().rstrip(":").strip().casefold() == target.casefold()
+
+
 COLUMN_SPECS = {
-    "usluga_pracownik":            ("Usługa pracownik", lambda h: h.strip() == "Usługa pracownik"),
+    "usluga_pracownik":            ("Usługa pracownik", lambda h: _hdr_eq(h, "Usługa pracownik")),
     "kategoria_usluga_pracownik":  ("Kategoria usługi (pracownik)", lambda h: h.startswith("Kategoria usługi(") and h.rstrip().endswith("(pracownik)")),
-    "zadanie_pracownik":           ("Zadanie pracownik", lambda h: h.strip() == "Zadanie pracownik"),
+    "zadanie_pracownik":           ("Zadanie pracownik", lambda h: _hdr_eq(h, "Zadanie pracownik")),
     "kategoria_zadania_pracownik": ("Kategoria zadania (pracownik)", lambda h: h.startswith("Kategoria zadania(") and h.rstrip().lower().endswith("(pracownik)")),
-    "zadanie_mieszkaniec":         ("Zadanie mieszkaniec", lambda h: h.strip() == "Zadanie mieszkaniec"),
+    "zadanie_mieszkaniec":         ("Zadanie mieszkaniec", lambda h: _hdr_eq(h, "Zadanie mieszkaniec")),
     "kategoria_zadania_mieszkaniec": ("Kategoria zadania (Mieszkaniec)", lambda h: h.startswith("Kategoria zadania(") and h.rstrip().lower().endswith("(mieszkaniec)")),
-    "usluga_mieszkaniec":          ("Usługa mieszkaniec", lambda h: h.strip() == "Usługa mieszkaniec"),
-    "czas_realizacji":             ("Nominalny czas realizacji", lambda h: h.strip() == "Nominalny czas realizacji"),
-    "stanowisko":                  ("Stanowisko", lambda h: h.strip() == "Stanowisko"),
+    "usluga_mieszkaniec":          ("Usługa mieszkaniec", lambda h: _hdr_eq(h, "Usługa mieszkaniec")),
+    "czas_realizacji":             ("Nominalny czas realizacji", lambda h: _hdr_eq(h, "Nominalny czas realizacji")),
+    "stanowisko":                  ("Stanowisko", lambda h: _hdr_eq(h, "Stanowisko")),
     "ilosc_pracownikow":           ("Ilość pracowników", lambda h: h.startswith("Ilość pracowników")),
     "priorytet":                   ("Piorytet zadania", lambda h: h.startswith("Piorytet zadania")),
     "kanal":                       ("Kanał komunikacyjny", lambda h: h.startswith("Kanał komunikacyjny")),
@@ -733,7 +739,7 @@ def read_tasks_from_excel(xlsx_path, sheet_name):
     # Opcjonalna kolumna -- używana tylko jako drugorzędne źródło dopasowania
     # dla pola 'Stanowisko' (patrz find_value_id_by_grupa_zawodowa), starsze
     # pliki Excela mogą jej nie mieć.
-    grupa_zawodowa_col = find_header_column(ws, 1, lambda h: h.strip() == "Grupa zawodowa")
+    grupa_zawodowa_col = find_header_column(ws, 1, lambda h: _hdr_eq(h, "Grupa zawodowa"))
 
     rows = []
     seen_pracownik = set()
