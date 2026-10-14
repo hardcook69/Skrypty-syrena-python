@@ -71,26 +71,46 @@ def plan_corrections(ws_v, mm, cols):
     return corr
 
 
-def flatten_columns(ws, columns):
-    """Rozscala pionowe scalenia w podanych kolumnach i wypełnia wartością."""
+def flatten_all(ws):
+    """Rozscala WSZYSTKIE scalenia i wypełnia każdy wiersz wartością bloku —
+    po tym każdy wiersz jest samodzielny (kolumny zadania/usług bywają scalone
+    w 2-wierszowe bloki, więc edycja per wiersz wymaga pełnego spłaszczenia)."""
     for rng in list(ws.merged_cells.ranges):
-        if rng.min_col == rng.max_col and rng.min_col in columns:
-            top = ws.cell(row=rng.min_row, column=rng.min_col).value
-            ws.unmerge_cells(str(rng.coord))
+        top = ws.cell(row=rng.min_row, column=rng.min_col).value
+        ws.unmerge_cells(str(rng.coord))
+        if rng.min_col == rng.max_col:   # pionowe (dane) — wypełnij kolumnę
             for rr in range(rng.min_row, rng.max_row + 1):
                 ws.cell(row=rr, column=rng.min_col).value = top
 
 
-def apply_corrections(src, sheet, out, cols, corr):
+def apply_corrections(src, sheet, out, cols):
+    """Spłaszcza arkusz i nanosi korektę ról per wiersz. Zwraca listę zmian."""
     c_org, c_up, c_zp, c_um, c_st = cols
-    wb = openpyxl.load_workbook(src)           # z zachowaniem stylów/scaleń
+    wb = openpyxl.load_workbook(src)
     ws = wb[sheet]
-    flatten_columns(ws, {c_up, c_um, c_st})
-    for r, d in corr.items():
-        ws.cell(row=r, column=c_up).value = d["up_new"]
-        if d["um_old"]:
-            ws.cell(row=r, column=c_um).value = d["um_new"]
-        ws.cell(row=r, column=c_st).value = d["st_new"]
+    flatten_all(ws)
+
+    changes = []
+    for r in range(2, ws.max_row + 1):
+        up = str(ws.cell(r, c_up).value or "")
+        zp = str(ws.cell(r, c_zp).value or "")
+        if not up.strip() or not zp.strip():
+            continue
+        role = K._role_of(up)
+        if role not in K.MED_ROLES or not K._is_care(zp):
+            continue
+        base_b = K._usluga_base_B(zp)
+        up_new = K._rewrite_usluga(up, new_base=base_b, new_role="OPIEKUN")
+        um = str(ws.cell(r, c_um).value or "")
+        um_new = K._rewrite_usluga(um, new_base=base_b, new_role="OPIEKUN") if um.strip() else ""
+        st_old = str(ws.cell(r, c_st).value or "")
+        org = str(ws.cell(r, c_org).value or "")
+        ws.cell(row=r, column=c_up).value = up_new
+        if um.strip():
+            ws.cell(row=r, column=c_um).value = um_new
+        ws.cell(row=r, column=c_st).value = CANON_OPIEKUN
+        changes.append({"r": r, "org": org, "zp": zp, "up_old": up, "up_new": up_new,
+                        "um_old": um, "um_new": um_new, "st_old": st_old, "st_new": CANON_OPIEKUN})
 
     log = wb.create_sheet("Zmiany korekty")
     hf = Font(bold=True, color="FFFFFF"); hfill = PatternFill("solid", fgColor="4472C4")
@@ -103,15 +123,13 @@ def apply_corrections(src, sheet, out, cols, corr):
         log.column_dimensions[openpyxl.utils.get_column_letter(j)].width = w
     log.freeze_panes = "A2"
     wrap = Alignment(wrap_text=True, vertical="top")
-    rr = 2
-    for r in sorted(corr):
-        d = corr[r]
-        vals = [r, d["org"], d["zp"], d["up_old"], d["up_new"],
+    for rr, d in enumerate(changes, start=2):
+        vals = [d["r"], d["org"], d["zp"], d["up_old"], d["up_new"],
                 d["um_old"] or "—", d["um_new"] or "—", d["st_old"], d["st_new"]]
         for j, v in enumerate(vals, start=1):
             cell = log.cell(row=rr, column=j, value=v); cell.alignment = wrap
-        rr += 1
     wb.save(out)
+    return changes
 
 
 # ── 2. SKAN PODEJRZANYCH ──────────────────────────────────────────────────────
@@ -201,10 +219,10 @@ def main():
             K._find_col(ws_v, "Zadanie pracownik"), K._find_col(ws_v, "Usługa mieszkaniec"),
             K._find_col(ws_v, "Stanowisko"))
 
-    corr = plan_corrections(ws_v, mm, cols)
-    apply_corrections(args.xlsx, args.sheet, args.out, cols, corr)
+    corr = plan_corrections(ws_v, mm, cols)   # zbiór wierszy „care" do pominięcia w skanie
+    changes = apply_corrections(args.xlsx, args.sheet, args.out, cols)
     print(f"✓ Poprawiono i zapisano: {args.out}")
-    print(f"  Skorygowanych wierszy (opiekuńcze spod roli medycznej → OPIEKUN): {len(corr)}")
+    print(f"  Skorygowanych wierszy (opiekuńcze spod roli medycznej → OPIEKUN): {len(changes)}")
 
     susp = scan_suspicious(ws_v, mm, cols, set(corr))
     write_report(susp, args.raport)
